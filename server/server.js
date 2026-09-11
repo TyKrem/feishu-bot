@@ -21,6 +21,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { URL } = require('url');
 const lark = require('@larksuiteoapi/node-sdk');
+const TAROT_IMAGE = require('./tarot-image.js');
 
 // 生活指令（记账 / 待办 / 塔罗 / 运势）由可选的 life-app 提供。
 // 找不到就降级：机器人照常工作，只是少了这几条指令。
@@ -68,6 +69,9 @@ const INTERNAL_HOST = String(ENV.FEISHU_INTERNAL_HOST || '127.0.0.1');
 const INTERNAL_PORT = parseInt(ENV.FEISHU_INTERNAL_PORT || '8796', 10);
 const BOT_OPEN_ID = String(ENV.FEISHU_BOT_OPEN_ID || '').trim();
 const BOT_NAME = String(ENV.FEISHU_BOT_NAME || '').trim();
+// 塔罗牌面图片：默认开启，取不到图片时自动降级为纯文字
+const TAROT_IMAGE_ENABLED = !/^(0|false|no)$/i.test(String(ENV.FEISHU_TAROT_IMAGE || '1').trim());
+const TAROT_CACHE_DIR = path.join(DATA_DIR, 'tarot');
 
 // 调试用：FEISHU_SIMULATE_EVENT 传入一条 im.message.receive_v1 事件 JSON，
 // 启动时不建立长连接，直接按该事件跑一遍消息处理；FEISHU_DRY_RUN=1 时只打印不发送。
@@ -413,6 +417,68 @@ async function replyText(messageId, text) {
   });
 }
 
+/* ---------------- 图片发送 ---------------- */
+// 上传到飞书换取 image_key（需要 im:resource 权限）
+async function uploadImage(filePath) {
+  const res = await client.im.image.create({
+    data: {
+      image_type: 'message',
+      image: fs.createReadStream(filePath),
+    },
+  });
+  // 注意：上传图片接口的返回体是 { image_key }，不像其他接口包在 data 里
+  const key = (res && (res.image_key || (res.data && res.data.image_key))) || '';
+  if (!key) throw new Error((res && (res.msg || res.message)) || '上传图片未返回 image_key');
+  return key;
+}
+
+async function sendImageToTarget(target, imageKey) {
+  const content = JSON.stringify({ image_key: imageKey });
+  if (target.kind === 'reply') {
+    await client.im.message.reply({
+      path: { message_id: target.id },
+      data: { msg_type: 'image', content: content },
+    });
+  } else if (target.kind === 'chat') {
+    await client.im.message.create({
+      params: { receive_id_type: 'chat_id' },
+      data: { receive_id: target.id, msg_type: 'image', content: content },
+    });
+  } else {
+    await client.im.message.create({
+      params: { receive_id_type: 'open_id' },
+      data: { receive_id: target.id, msg_type: 'image', content: content },
+    });
+  }
+}
+
+// 发送本地图片；失败只记日志，不影响已经发出的文字
+function deliverImage(target, filePath, opts) {
+  if (!filePath) return;
+  const delay = (opts && opts.immediate) ? 0 : replyDelayMs();
+  enqueueSend(function () {
+    return sleep(delay).then(async function () {
+      if (DRY_RUN) {
+        console.log('[dry-run] → image ' + target.kind + ':' + target.id + ' ' + path.basename(filePath));
+        return;
+      }
+      try {
+        const key = await uploadImage(filePath);
+        await sendImageToTarget(target, key);
+        writeLog('info', '图片已发送', {
+          kind: target.kind,
+          id: target.id,
+          file: path.basename(filePath),
+        });
+      } catch (e) {
+        const detail = errText(e);
+        console.error('发送图片失败：' + detail);
+        writeLog('warn', '发送图片失败', { file: path.basename(filePath), error: detail });
+      }
+    });
+  });
+}
+
 /*
  * target: { kind: 'reply'|'chat'|'user', id }
  * opts.immediate: 主动推送不走随机延迟
@@ -622,7 +688,8 @@ function handleMessage(data) {
     return;
   }
   if (/^(?:\.(?:tarot|t)|塔罗|塔罗牌|抽塔罗|抽牌)$/i.test(text)) {
-    deliver(replyTarget, LIFE_ENABLED ? tarotText() : NEED_LIFE_APP);
+    if (!LIFE_ENABLED) deliver(replyTarget, NEED_LIFE_APP);
+    else sendTarot(replyTarget);
     return;
   }
   if (/^(?:\.fortune|\.f|运势|今日运势|今日运程|今日运气)$/i.test(text)) {
@@ -685,12 +752,33 @@ function rollDiceText(text) {
   return '🎲 ' + lines.join('\n') + '\n总计 ' + grandTotal;
 }
 
-function tarotText() {
-  const card = LIFE_FORTUNE.pickTarot();
-  const meaning = card.reversed ? card.rev : card.up;
-  return '🃏 塔罗牌：' + card.display +
+function tarotText(card) {
+  const c = card || LIFE_FORTUNE.pickTarot();
+  const meaning = c.reversed ? c.rev : c.up;
+  return '🃏 塔罗牌：' + c.display +
     '\n解读：' + meaning +
-    '\n\n今天的建议：围绕“' + (card.reversed ? '先想清楚再行动' : '顺势推进') + '”，保持轻松心态。';
+    '\n\n今天的建议：围绕“' + (c.reversed ? '先想清楚再行动' : '顺势推进') + '”，保持轻松心态。';
+}
+
+// 抽牌：先回文字（牌名 + 解读），再把牌面图片发过去
+function sendTarot(target) {
+  const card = LIFE_FORTUNE.pickTarot();
+  deliver(target, tarotText(card));
+  if (!TAROT_IMAGE_ENABLED) return;
+  TAROT_IMAGE.getTarotImage({
+    index: card.index,
+    reversed: card.reversed,
+    cacheDir: TAROT_CACHE_DIR,
+    log: function (msg) { writeLog('info', '塔罗牌面', { message: msg }); },
+  }).then(function (file) {
+    if (file) {
+      deliverImage(target, file);
+    } else {
+      writeLog('warn', '本次未取到塔罗牌面，只回文字', { card: card.name });
+    }
+  }).catch(function (e) {
+    writeLog('warn', '塔罗牌面异常', { error: e && e.message ? e.message : String(e) });
+  });
 }
 
 function startFortuneCommand(target, ids, key, life, restricted) {

@@ -14,6 +14,7 @@
 - **白名单**：私聊按 `open_id` 放行；白名单为空时只回报身份，不执行任何操作
 - **群聊**：需 @ 机器人 才响应，可再按 `chat_id` 加白名单
 - **内置指令**：骰子、塔罗、每日运势、记账、待办（后四项依赖可选的 life-app）
+- **塔罗带牌面**：抽塔罗时自动附上对应牌面的图片，逆位会把图片倒过来
 - **随机回复延迟**：避免"秒回"得像脚本
 - **本地通知接口**：供 cron / 定时任务 / 监控告警推送消息到飞书
 - **优雅降级**：没装 life-app 也能正常运行，只是少几条生活指令
@@ -86,7 +87,7 @@ journalctl -u feishu-bot -f
 | `.c 内容` / `.codex 内容` | 调用 Codex 处理 |
 | `.help` / `帮助` | 帮助 |
 | `.rand 3d10` / `骰子 3d10` | 投骰子（支持 `2d6+1`、`d20`） |
-| `.tarot` / `塔罗牌` | 抽塔罗 *（需 life-app）* |
+| `.tarot` / `塔罗牌` | 抽塔罗，附牌面图片 *（需 life-app）* |
 | `.fortune` / `今日运势` | 每日运势，按天缓存 *（需 life-app）* |
 | 记账 / 待办类中文 | 直接处理，不启动 Codex *（需 life-app）* |
 
@@ -107,6 +108,7 @@ journalctl -u feishu-bot -f
 | `FEISHU_INTERNAL_HOST` / `FEISHU_INTERNAL_PORT` | 通知接口监听地址，默认 `127.0.0.1:8796` |
 | `FEISHU_BOT_OPEN_ID` / `FEISHU_BOT_NAME` | 群聊里判断是否被 @，填了更准 |
 | `FEISHU_LIFE_KEY_MAP` | `open_id=旧主键`，用于沿用历史记账 / 待办数据 |
+| `FEISHU_TAROT_IMAGE` | 塔罗是否附牌面图片，`1` 开（默认）/ `0` 关 |
 | `LIFE_APP_DIR` | life-app 所在目录（默认依次找 `/opt/life-app`、`/root/life-app`） |
 | `FEISHU_CODEX_BIN` | Codex 可执行文件路径 |
 | `FEISHU_WORKSPACE` | Codex 工作目录，默认 `/root` |
@@ -153,6 +155,18 @@ FEISHU_DRY_RUN=1 node server/server.js
 
 安装方式：把 life-app 放到 `/opt/life-app` 或 `/root/life-app`，
 或用 `LIFE_APP_DIR` 指定路径后重启。
+
+## 塔罗牌面图片
+
+抽塔罗时，除了文字解读还会发一张对应牌面的图片：正位原图，逆位把图片旋转 180°。
+
+- 牌面取自 [Wikimedia Commons](https://commons.wikimedia.org/) 上的
+  Rider-Waite-Smith 牌组（1909 年出版，**公有领域**），只涵盖 22 张大阿卡纳
+- 首次使用时按需下载并缓存在 `FEISHU_DATA_DIR/tarot/`，之后直接读本地文件
+- 取不到图片时自动降级为纯文字，不影响指令本身
+- 发图片需要飞书 **`im:resource`** 权限（上传图片用），记得在权限管理里开通并发布版本
+
+关闭图片：把 `FEISHU_TAROT_IMAGE` 设为 `0`。
 
 ## 安全提示
 

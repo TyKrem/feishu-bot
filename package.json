@@ -8,6 +8,7 @@
     "start": "node server/server.js"
   },
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "^1.73.3"
+    "@larksuiteoapi/node-sdk": "^1.73.3",
+    "jpeg-js": "^0.4.4"
   }
 }
