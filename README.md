@@ -57,13 +57,13 @@
 9. 用脚本写入白名单与默认收件人（一步到位）：
    ```bash
    /opt/feishu-bot/bin/setup-account.sh ou_xxxxxxxxxxxxxxxx                 # 不沿用旧数据
-   /opt/feishu-bot/bin/setup-account.sh ou_xxxxxxxxxxxxxxxx 10001      # 沿用原 QQ 的记账/待办
+   /opt/feishu-bot/bin/setup-account.sh ou_xxxxxxxxxxxxxxxx 10001           # 沿用原 QQ 的记账/待办
    ```
    等价于手动编辑 `/etc/feishu-bot.env`：
    ```ini
    FEISHU_ALLOW_USERS=ou_xxxxxxxxxxxxxxxx
    FEISHU_NOTIFY_USER=ou_xxxxxxxxxxxxxxxx
-   FEISHU_LIFE_KEY_MAP=ou_xxxxxxxxxxxxxxxx=10001   # 想沿用旧记账/待办数据时填
+   FEISHU_LIFE_KEY_MAP=ou_xxxxxxxxxxxxxxxx=10001        # 想沿用旧记账/待办数据时填
    ```
 
 ```bash

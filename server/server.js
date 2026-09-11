@@ -64,7 +64,7 @@ const DRY_RUN = /^(1|true|yes)$/i.test(String(ENV.FEISHU_DRY_RUN || ''));
 
 // 生活数据按“身份键”隔离。QQ 时代的数据以 QQ 号为主键，
 // FEISHU_LIFE_KEY_MAP 可以把飞书身份映射回原来的键，免迁移数据。
-// 格式：ou_xxx=10001,ou_yyy=2207536710
+// 格式：ou_xxx=10001,ou_yyy=10002
 const LIFE_KEY_MAP = parseKeyMap(ENV.FEISHU_LIFE_KEY_MAP);
 const LEGACY_TO_FEISHU = reverseMap(LIFE_KEY_MAP);
 
