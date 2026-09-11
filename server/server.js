@@ -73,10 +73,21 @@ const BOT_NAME = String(ENV.FEISHU_BOT_NAME || '').trim();
 const TAROT_IMAGE_ENABLED = !/^(0|false|no)$/i.test(String(ENV.FEISHU_TAROT_IMAGE || '1').trim());
 const TAROT_CACHE_DIR = path.join(DATA_DIR, 'tarot');
 
+// 用户发来的图片只落盘登记，不主动识别；用户明确要求时才交给 Codex 读
+const IMAGE_DIR = path.join(DATA_DIR, 'images');
+const IMAGE_INDEX_FILE = path.join(IMAGE_DIR, 'index.json');
+// 保留周期：超过这个天数的图片在清理时删除，可用 FEISHU_IMAGE_RETENTION_DAYS 调整
+const IMAGE_RETENTION_DAYS = Math.max(1, parseFloat(ENV.FEISHU_IMAGE_RETENTION_DAYS || '7') || 7);
+const IMAGE_CLEAN_INTERVAL_MS = 6 * 60 * 60 * 1000;
+// 每个会话索引保留的条数上限，超出后从最旧的开始连同文件一起删
+const IMAGE_PER_KEY_LIMIT = Math.max(10, parseInt(ENV.FEISHU_IMAGE_MAX_PER_KEY || '200', 10) || 200);
+
 // 调试用：FEISHU_SIMULATE_EVENT 传入一条 im.message.receive_v1 事件 JSON，
 // 启动时不建立长连接，直接按该事件跑一遍消息处理；FEISHU_DRY_RUN=1 时只打印不发送。
 const SIMULATE_EVENT = String(ENV.FEISHU_SIMULATE_EVENT || '').trim();
 const DRY_RUN = /^(1|true|yes)$/i.test(String(ENV.FEISHU_DRY_RUN || ''));
+// 连发多张图片时合并成一条回执，避免刷屏；调试模式下缩短等待
+const IMAGE_ACK_DELAY_MS = DRY_RUN ? 200 : 2500;
 
 // 生活数据按“身份键”隔离。QQ 时代的数据以 QQ 号为主键，
 // FEISHU_LIFE_KEY_MAP 可以把飞书身份映射回原来的键，免迁移数据。
@@ -178,7 +189,11 @@ const PROMPT_TAIL =
   '（飞书机器人场景）请使用简体中文回复；回复要简洁，适合在飞书里阅读。' +
   '飞书文本消息不渲染 Markdown 语法，尽量避免使用 ** 加粗、# 标题、表格与代码块围栏，' +
   '需要分点时用「1. 2. 3.」或「- 」这样的纯文本。命令执行结果太长时先给摘要，需要时再贴关键内容。' +
-  '如果用户要求执行有破坏性的操作，先说明风险再执行。';
+  '如果用户要求执行有破坏性的操作，先说明风险再执行。' +
+  '图片规则：用户发到飞书里的图片已存到本地并登记（目录 ' + IMAGE_DIR + '，索引 ' + IMAGE_INDEX_FILE + '）。' +
+  '不要一上来就读图或描述图片内容——只有用户明确要求看某张图时才读对应文件，' +
+  '需要多张时按登记编号（第几张）顺序处理。' +
+  '清理磁盘时只清理超出保留周期（默认 ' + IMAGE_RETENTION_DAYS + ' 天）的图片，未过期的不要删。';
 const GUEST_PROMPT_TAIL =
   '（飞书机器人场景）请使用简体中文回复；回复要简洁，适合在飞书里阅读，避免 Markdown 语法。' +
   '你是纯文字聊天助手：不执行系统命令、不读取/修改服务器文件、不提供任何密钥或令牌。';
@@ -219,7 +234,9 @@ const HELP_LIFE_RESTRICTED =
   '· 加待办：买牛奶 / 待办 / 完成待办 1';
 
 const HELP_TAIL =
-  '\n\n⏰ 提醒 / 查文件 / 服务器等需求，用：.c 内容\n' +
+  '\n\n📷 直接发图片：我先存下来并按顺序编号，不主动识别；\n' +
+  '  要看时再说一句，例如：.c 看下第 2 张图\n' +
+  '⏰ 提醒 / 查文件 / 服务器等需求，用：.c 内容\n' +
   '  例如：.c 十分钟后提醒我看锅、.c 今天服务器状态\n' +
   '💬 其他未匹配消息会自动回复本帮助\n' +
   '👥 群聊里需要 @ 我 才会响应';
@@ -303,6 +320,215 @@ function localDateKey() {
   const d = new Date();
   const p = function (n) { return n < 10 ? '0' + n : '' + n; };
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+
+/* ---------------- 用户图片（只登记，不主动识别） ---------------- */
+// 索引结构：{ seq: { 会话键: 已分配的最大编号 }, items: { 会话键: [条目] } }
+let imageIndex = { seq: {}, items: {} };
+
+function loadImageIndex() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(IMAGE_INDEX_FILE, 'utf8'));
+    imageIndex = {
+      seq: (raw && raw.seq) || {},
+      items: (raw && raw.items) || {},
+    };
+  } catch (e) {
+    imageIndex = { seq: {}, items: {} };
+  }
+}
+
+function saveImageIndex() {
+  try {
+    fs.mkdirSync(IMAGE_DIR, { recursive: true });
+    fs.writeFileSync(IMAGE_INDEX_FILE + '.tmp', JSON.stringify(imageIndex, null, 2));
+    fs.renameSync(IMAGE_INDEX_FILE + '.tmp', IMAGE_INDEX_FILE);
+  } catch (e) {
+    writeLog('warn', '图片索引写入失败', { error: en(e) });
+  }
+}
+
+// 会话键里有 ':'（p:ou_xxx、g:oc_xxx:ou_xxx），做文件名前先换成安全字符
+function imageKeySlug(key) {
+  return String(key || 'unknown').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80);
+}
+
+function imageExtFromType(contentType) {
+  const type = String(contentType || '').split(';')[0].trim().toLowerCase();
+  if (type === 'image/png') return '.png';
+  if (type === 'image/gif') return '.gif';
+  if (type === 'image/webp') return '.webp';
+  if (type === 'image/bmp') return '.bmp';
+  if (type === 'image/heic') return '.heic';
+  return '.jpg';
+}
+
+function imageStamp(ts) {
+  const d = new Date(Number(ts) || Date.now());
+  const p = function (n) { return n < 10 ? '0' + n : '' + n; };
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+    + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+// 下载单张图片到 .part，再按返回的 content-type 改名，避免扩展名写错
+function fetchImageToFile(messageId, imageKey, partPath) {
+  return client.im.messageResource.get({
+    params: { type: 'image' },
+    path: { message_id: messageId, file_key: imageKey },
+  }).then(function (res) {
+    if (!res || typeof res.writeFile !== 'function') throw new Error('飞书未返回图片数据');
+    return res.writeFile(partPath).then(function () {
+      const headers = (res && res.headers) || {};
+      return headers['content-type'] || headers['Content-Type'] || '';
+    });
+  });
+}
+
+function trimImageItems(key) {
+  const list = imageIndex.items[key] || [];
+  while (list.length > IMAGE_PER_KEY_LIMIT) {
+    const old = list.shift();
+    try { fs.unlinkSync(path.join(IMAGE_DIR, old.file)); } catch (e) {}
+  }
+  imageIndex.items[key] = list;
+}
+
+// 连发图片时合并回执：同一会话 N 秒内的图片只回一条
+const pendingImageAck = {};
+const pendingImageAckTimer = {};
+
+function scheduleImageAck(target, key, seq) {
+  const state = pendingImageAck[key] || { target: target, first: seq, last: seq, count: 0 };
+  state.target = target;
+  state.last = seq;
+  state.count += 1;
+  pendingImageAck[key] = state;
+  if (pendingImageAckTimer[key]) return;
+  pendingImageAckTimer[key] = setTimeout(function () {
+    delete pendingImageAckTimer[key];
+    const done = pendingImageAck[key];
+    delete pendingImageAck[key];
+    if (!done) return;
+    const range = done.count > 1
+      ? '第 ' + done.first + '-' + done.last + ' 张'
+      : '第 ' + done.first + ' 张';
+    deliver(done.target,
+      '📷 已记录 ' + done.count + ' 张图片（' + range + '），暂不识别。\n'
+      + '需要我看的时候说一声，例如：.c 看下第 ' + done.first + ' 张图');
+  }, IMAGE_ACK_DELAY_MS);
+}
+
+// 登记一批图片：编号先按到达顺序分配，保证多张图序号稳定
+function registerImages(message, ids, key, target) {
+  const imageKeys = extractImageKeys(message);
+  if (!imageKeys.length) return;
+  const messageId = String(message.message_id || '');
+  const chatId = String(message.chat_id || '');
+  const day = localDateKey();
+  const dayDir = path.join(IMAGE_DIR, day);
+  try { fs.mkdirSync(dayDir, { recursive: true }); } catch (e) {}
+
+  imageKeys.forEach(function (imageKey) {
+    const seq = (parseInt(imageIndex.seq[key], 10) || 0) + 1;
+    imageIndex.seq[key] = seq;
+    const base = path.join(dayDir, imageKeySlug(key) + '_' + seq);
+    const partPath = base + '.part';
+    fetchImageToFile(messageId, imageKey, partPath).then(function (contentType) {
+      const filePath = base + imageExtFromType(contentType);
+      fs.renameSync(partPath, filePath);
+      const stat = fs.statSync(filePath);
+      const item = {
+        n: seq,
+        file: path.relative(IMAGE_DIR, filePath),
+        messageId: messageId,
+        imageKey: imageKey,
+        openId: ids[0] || '',
+        chatId: chatId,
+        savedAt: Date.now(),
+        bytes: stat.size,
+      };
+      (imageIndex.items[key] || (imageIndex.items[key] = [])).push(item);
+      trimImageItems(key);
+      saveImageIndex();
+      scheduleImageAck(target, key, seq);
+      writeLog('info', '已登记飞书图片', {
+        key: key,
+        n: seq,
+        file: item.file,
+        bytes: item.bytes,
+      });
+    }).catch(function (e) {
+      try { fs.unlinkSync(partPath); } catch (e2) {}
+      const detail = errText(e);
+      writeLog('warn', '图片登记失败', { key: key, n: seq, error: detail });
+      deliver(target, '这张图片我没取到（' + detail + '），麻烦重发一次或改用文字描述。');
+    });
+  });
+}
+
+// 交给 Codex 的图片上下文：只有编号、时间、路径，不含图片内容
+function imageContextText(key) {
+  const list = imageIndex.items[key] || [];
+  if (!list.length) return '';
+  const recent = list.slice(-10).map(function (it) {
+    return '第' + it.n + '张 ' + imageStamp(it.savedAt) + ' ' + path.join(IMAGE_DIR, it.file);
+  });
+  return '（本会话已登记但未识别的图片共 ' + list.length + ' 张，最近 '
+    + recent.length + ' 张如下；除非用户明确要求，不要读取图片内容）\n'
+    + recent.join('\n');
+}
+
+// 清理：只删超出保留周期的图片，未过期的一律保留
+function cleanupImages() {
+  const cutoff = Date.now() - IMAGE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  let removed = 0;
+  const keptItems = {};
+  const keptFiles = {};
+
+  Object.keys(imageIndex.items).forEach(function (key) {
+    const kept = [];
+    (imageIndex.items[key] || []).forEach(function (it) {
+      const filePath = path.join(IMAGE_DIR, String(it.file || ''));
+      if (Number(it.savedAt) >= cutoff && fs.existsSync(filePath)) {
+        kept.push(it);
+        keptFiles[path.relative(IMAGE_DIR, filePath)] = true;
+      } else {
+        try { fs.unlinkSync(filePath); } catch (e) {}
+        removed++;
+      }
+    });
+    if (kept.length) keptItems[key] = kept;
+  });
+  imageIndex.items = keptItems;
+
+  // 兜底：清掉索引之外的历史文件（比如下载中断的 .part），未过期的跳过
+  let dayDirs = [];
+  try { dayDirs = fs.readdirSync(IMAGE_DIR); } catch (e) { dayDirs = []; }
+  dayDirs.forEach(function (name) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(name)) return;
+    const dirPath = path.join(IMAGE_DIR, name);
+    let files = [];
+    try { files = fs.readdirSync(dirPath); } catch (e) { return; }
+    files.forEach(function (file) {
+      const rel = name + '/' + file;
+      if (keptFiles[rel]) return;
+      const filePath = path.join(dirPath, file);
+      let stat = null;
+      try { stat = fs.statSync(filePath); } catch (e) { return; }
+      if (!stat.isFile() || stat.mtimeMs >= cutoff) return;
+      try { fs.unlinkSync(filePath); } catch (e) { return; }
+      removed++;
+    });
+    try {
+      if (!fs.readdirSync(dirPath).length) fs.rmdirSync(dirPath);
+    } catch (e) {}
+  });
+
+  if (removed) {
+    saveImageIndex();
+    writeLog('info', '清理超期图片', { removed: removed, retentionDays: IMAGE_RETENTION_DAYS });
+  }
+  return removed;
 }
 
 /* ---------------- 日志上报 ---------------- */
@@ -581,6 +807,27 @@ function extractText(message) {
   return '';
 }
 
+// 取出消息里的图片：image 消息本身，或富文本(post)里内嵌的 img 节点
+function extractImageKeys(message) {
+  const type = String((message && message.message_type) || '');
+  let content = {};
+  try { content = JSON.parse((message && message.content) || '{}'); } catch (e) { return []; }
+  if (type === 'image') {
+    const key = String(content.image_key || '').trim();
+    return key ? [key] : [];
+  }
+  if (type === 'post') {
+    const keys = [];
+    (content.content || []).forEach(function (line) {
+      (line || []).forEach(function (node) {
+        if (node && node.tag === 'img' && node.image_key) keys.push(String(node.image_key));
+      });
+    });
+    return keys;
+  }
+  return [];
+}
+
 const seenMessages = new Map();
 function isDuplicate(messageId) {
   const id = String(messageId || '');
@@ -596,7 +843,8 @@ function isDuplicate(messageId) {
   return false;
 }
 
-const IMAGE_HINT = '我现在只能读文字消息，图片/文件麻烦改成文字描述一下。';
+const IMAGE_HINT = '我现在只能读文字和图片：图片会先存下来登记，等你说要看时我才读；'
+  + '文件/语音这类消息麻烦改成文字描述一下。';
 
 function mentionIsBot(message) {
   const mentions = (message && message.mentions) || [];
@@ -648,8 +896,22 @@ function handleMessage(data) {
 
   const rawText = extractText(message);
   const messageType = String(message.message_type || '');
-  if (!rawText.trim() && messageType !== 'text' && messageType !== 'post') {
-    deliver({ kind: 'reply', id: messageId, fallbackChatId: chatId }, IMAGE_HINT);
+  const replyTarget = { kind: 'reply', id: messageId, fallbackChatId: chatId };
+  const restricted = matches(RESTRICTED_USERS, ids);
+  const key = isGroup ? 'g:' + chatId + ':' + ids[0] : 'p:' + ids[0];
+  const imageKeys = extractImageKeys(message);
+
+  // 图片：先落盘登记，不识别；用户明确要求时才交给 Codex 读
+  if (imageKeys.length) {
+    if (restricted) {
+      deliver(replyTarget, '图片需要 Codex 才能看，当前账号是受限账号，只能纯文字聊天。');
+      return;
+    }
+    registerImages(message, ids, key, replyTarget);
+    if (!rawText.trim()) return;
+    // 图文混排（富文本）时继续按文字走，图片已在后台登记
+  } else if (!rawText.trim() && messageType !== 'text' && messageType !== 'post') {
+    deliver(replyTarget, IMAGE_HINT);
     return;
   }
 
@@ -664,9 +926,6 @@ function handleMessage(data) {
   }
   if (text.charAt(0) === '。') text = '.' + text.slice(1);
 
-  const replyTarget = { kind: 'reply', id: messageId, fallbackChatId: chatId };
-  const restricted = matches(RESTRICTED_USERS, ids);
-  const key = isGroup ? 'g:' + chatId + ':' + ids[0] : 'p:' + ids[0];
   const life = lifeKey(ids);
 
   const codexPrompt = extractCodexPrompt(text);
@@ -844,7 +1103,10 @@ function startCodexTask(target, ids, key, life, restricted, prompt) {
     thread: (threads[key] || {}).threadId || null,
     restricted: restricted,
   });
-  const task = restricted ? runGuestChat(target, key, prompt) : runCodex(target, key, prompt);
+  // 图片只给编号与路径，读不读由用户指令决定（PROMPT_TAIL 里已固化该规则）
+  const imageContext = restricted ? '' : imageContextText(key);
+  const codexPrompt = imageContext ? imageContext + '\n\n' + prompt : prompt;
+  const task = restricted ? runGuestChat(target, key, prompt) : runCodex(target, key, codexPrompt);
   task.finally(function () {
     active.delete(key);
     activeCount = Math.max(0, activeCount - 1);
@@ -1287,6 +1549,7 @@ if (CHECK_ONLY) {
   console.log('  默认收件人 : ' + (NOTIFY_USER || '（空）'));
   console.log('  Codex HOME : ' + CODEX_HOME);
   console.log('  数据目录   : ' + DATA_DIR);
+  console.log('  图片目录   : ' + IMAGE_DIR + '（保留 ' + IMAGE_RETENTION_DAYS + ' 天）');
   console.log('  内部通知   : http://' + INTERNAL_HOST + ':' + INTERNAL_PORT + '/internal/notify');
   console.log('  生活键映射 : ' + (Object.keys(LIFE_KEY_MAP).length ? JSON.stringify(LIFE_KEY_MAP) : '（空）'));
   if (problems.length) {
@@ -1302,6 +1565,10 @@ ensureDirs();
 loadThreads();
 loadGuestChats();
 loadFortuneCache();
+loadImageIndex();
+// 超期图片清理：启动时清一次，之后每 6 小时一次
+cleanupImages();
+setInterval(cleanupImages, IMAGE_CLEAN_INTERVAL_MS).unref();
 startInternalNotifyServer();
 
 if (!SIMULATE_EVENT && (!APP_ID || !APP_SECRET)) {

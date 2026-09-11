@@ -15,6 +15,7 @@
 - **群聊**：需 @ 机器人 才响应，可再按 `chat_id` 加白名单
 - **内置指令**：骰子、塔罗、每日运势、记账、待办（后四项依赖可选的 life-app）
 - **塔罗带牌面**：抽塔罗时自动附上对应牌面的图片，逆位会把图片倒过来
+- **图片只登记不识别**：直接发图先落盘并按顺序编号，你明确说要看时才让 Codex 读
 - **随机回复延迟**：避免"秒回"得像脚本
 - **本地通知接口**：供 cron / 定时任务 / 监控告警推送消息到飞书
 - **优雅降级**：没装 life-app 也能正常运行，只是少几条生活指令
@@ -37,7 +38,8 @@ feishu-bot ── spawn ──> codex exec --json ──> 整理输出
 1. 打开[飞书开放平台](https://open.feishu.cn/app)，创建「企业自建应用」
 2. 「凭证与基础信息」拿到 **App ID / App Secret**
 3. 「添加应用能力」启用**机器人**
-4. 「权限管理」开通 `im:message`、`im:message:send_as_bot`
+4. 「权限管理」开通 `im:message`、`im:message:send_as_bot`，
+   以及收发图片需要的 `im:resource`
 5. 「事件与回调」→ 订阅方式选**使用长连接接收事件**，添加事件 `im.message.receive_v1`
 6. 「版本管理与发布」创建版本并发布（企业内可能需要管理员审核）
 
@@ -90,6 +92,7 @@ journalctl -u feishu-bot -f
 | `.tarot` / `塔罗牌` | 抽塔罗，附牌面图片 *（需 life-app）* |
 | `.fortune` / `今日运势` | 每日运势，按天缓存 *（需 life-app）* |
 | 记账 / 待办类中文 | 直接处理，不启动 Codex *（需 life-app）* |
+| 直接发图片 | 先存盘登记（不识别），要看时说 `.c 看下第 2 张图` |
 
 常用指令**不写前缀**也能用（`帮助`、`塔罗牌`、`今日运势`、`骰子 3d10`）；
 带前缀时 `.` 也可以写成 `。`。
@@ -109,6 +112,8 @@ journalctl -u feishu-bot -f
 | `FEISHU_BOT_OPEN_ID` / `FEISHU_BOT_NAME` | 群聊里判断是否被 @，填了更准 |
 | `FEISHU_LIFE_KEY_MAP` | `open_id=旧主键`，用于沿用历史记账 / 待办数据 |
 | `FEISHU_TAROT_IMAGE` | 塔罗是否附牌面图片，`1` 开（默认）/ `0` 关 |
+| `FEISHU_IMAGE_RETENTION_DAYS` | 收到的图片保留天数，默认 `7`，超期在清理时删除 |
+| `FEISHU_IMAGE_MAX_PER_KEY` | 每个会话最多保留多少张图片的索引，默认 `200` |
 | `LIFE_APP_DIR` | life-app 所在目录（默认依次找 `/opt/life-app`、`/root/life-app`） |
 | `FEISHU_CODEX_BIN` | Codex 可执行文件路径 |
 | `FEISHU_WORKSPACE` | Codex 工作目录，默认 `/root` |
@@ -167,6 +172,21 @@ FEISHU_DRY_RUN=1 node server/server.js
 - 发图片需要飞书 **`im:resource`** 权限（上传图片用），记得在权限管理里开通并发布版本
 
 关闭图片：把 `FEISHU_TAROT_IMAGE` 设为 `0`。
+
+## 收到的图片
+
+直接发到飞书里的图片（含富文本消息里内嵌的图）不会立刻识别，先落盘登记：
+
+- 存放：`FEISHU_DATA_DIR/images/<日期>/`，文件名里带会话与编号
+- 索引：`FEISHU_DATA_DIR/images/index.json`，记录编号、时间、路径、发送人
+- 回执：连发多张只回一条，比如「已记录 2 张图片（第 1-2 张），暂不识别」
+- 读图：只有你明确要求时才读，比如 `.c 看下第 2 张图`；要多张时按编号顺序处理
+- 清理：超过 `FEISHU_IMAGE_RETENTION_DAYS`（默认 7 天）的图片会被删掉，
+  进程启动时清一次，之后每 6 小时一次，未过期的一张都不动
+- 每次调用 Codex 只带上「编号 + 时间 + 路径」的登记清单，不带图片内容，
+  「不主动读图」也写进了系统提示词
+
+收图和读图都需要飞书 **`im:resource`** 权限。
 
 ## 安全提示
 
