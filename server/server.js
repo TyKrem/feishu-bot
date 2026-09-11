@@ -22,13 +22,25 @@ const { spawn } = require('child_process');
 const { URL } = require('url');
 const lark = require('@larksuiteoapi/node-sdk');
 
+// 生活指令（记账 / 待办 / 塔罗 / 运势）由可选的 life-app 提供。
+// 找不到就降级：机器人照常工作，只是少了这几条指令。
 function requireLife(mod) {
-  try { return require('/opt/life-app/lib/' + mod); } catch (e) {}
-  return require('/root/life-app/lib/' + mod);
+  const lifeDir = String(process.env.LIFE_APP_DIR || '').replace(/\/+$/, '');
+  const dirs = [
+    lifeDir ? lifeDir + '/lib/' : '',
+    '/opt/life-app/lib/',
+    '/root/life-app/lib/',
+    path.join(__dirname, '..', 'vendor', 'life-app', 'lib/'),
+  ].filter(Boolean);
+  for (let i = 0; i < dirs.length; i++) {
+    try { return require(dirs[i] + mod); } catch (e) {}
+  }
+  return null;
 }
 const LIFE_ACTIONS = requireLife('actions.js');
 const LIFE_FORTUNE = requireLife('fortune.js');
 const LIFE_PROFILE = requireLife('profile.js');
+const LIFE_ENABLED = !!(LIFE_ACTIONS && LIFE_FORTUNE && LIFE_PROFILE);
 
 const ENV = process.env;
 
@@ -167,39 +179,61 @@ const GUEST_PROMPT_TAIL =
   '（飞书机器人场景）请使用简体中文回复；回复要简洁，适合在飞书里阅读，避免 Markdown 语法。' +
   '你是纯文字聊天助手：不执行系统命令、不读取/修改服务器文件、不提供任何密钥或令牌。';
 
-const BOT_HELP =
+/* ---------------- 帮助文本 ---------------- */
+// 塔罗 / 运势 / 记账 / 待办 依赖可选的 life-app，没装就不列出来
+const HELP_HEAD =
   '🔧 现成指令：\n' +
   '· .help 显示本帮助\n' +
   '· .codex 内容 / .c 内容 调用 Codex 处理\n' +
   '· .rand / .r 3d10 投骰子（支持 2d6+1、d20）\n' +
-  '· .tarot / .t 抽一张塔罗牌并解读\n' +
-  '· .fortune / .f 今日运势（每天仅计算一次，之后直接返回缓存）\n' +
-  '· 所有指令开头的 . 都可以换成 。（如 。help、。rand 3d10）\n\n' +
-  '📒 记账：\n' +
+  (LIFE_ENABLED ? '· .tarot / .t 抽一张塔罗牌并解读\n· .fortune / .f 今日运势（每天算一次，之后返回缓存）\n' : '') +
+  '· 所有指令开头的 . 都可以换成 。（如 。help、。rand 3d10）';
+
+const HELP_HEAD_RESTRICTED =
+  '🔧 现成指令：\n' +
+  '· .help 显示本帮助\n' +
+  '· .c 内容 使用纯聊天助手（无系统权限）\n' +
+  '· .rand / .r 3d10 投骰子\n' +
+  (LIFE_ENABLED ? '· .tarot / .t 抽塔罗\n' : '') +
+  '· 指令开头的 . 也可用。代替';
+
+const HELP_LIFE =
+  '\n\n📒 记账：\n' +
   '· 记：午饭 25 / 记账 打车 12\n' +
   '· 水费缴费50元（生活缴费也能识别）\n' +
   '· 查账 / 本月花了多少\n' +
   '· 预算 3000\n\n' +
   '📝 待办：\n' +
   '· 加待办：买牛奶\n' +
-  '· 待办 / 完成待办 1 / 删除待办 2\n\n' +
-  '⏰ 提醒 / 运势 / 查文件 / 服务器等需求，用：.c 内容\n' +
-  '  例如：.c 十分钟后提醒我看锅、.c 今天运势\n' +
-  '💬 其他未匹配消息会自动回复本帮助\n' +
-  '👥 群聊里需要 @ 我 才会响应';
-const BOT_HELP_RESTRICTED =
-  '🔧 现成指令：\n' +
-  '· .help 显示本帮助\n' +
-  '· .c 内容 使用纯聊天助手（无系统权限）\n' +
-  '· .rand / .r 3d10 投骰子\n' +
-  '· .tarot / .t 抽塔罗\n' +
-  '· 指令开头的 . 也可用。代替\n\n' +
-  '📒 记账：\n' +
+  '· 待办 / 完成待办 1 / 删除待办 2';
+
+const HELP_LIFE_RESTRICTED =
+  '\n\n📒 记账：\n' +
   '· 记：午饭 25 / 水费缴费50元\n' +
   '· 查账 / 本月花了多少\n\n' +
   '📝 待办：\n' +
-  '· 加待办：买牛奶 / 待办 / 完成待办 1\n\n' +
+  '· 加待办：买牛奶 / 待办 / 完成待办 1';
+
+const HELP_TAIL =
+  '\n\n⏰ 提醒 / 查文件 / 服务器等需求，用：.c 内容\n' +
+  '  例如：.c 十分钟后提醒我看锅、.c 今天服务器状态\n' +
+  '💬 其他未匹配消息会自动回复本帮助\n' +
+  '👥 群聊里需要 @ 我 才会响应';
+
+const HELP_TAIL_RESTRICTED =
+  '\n\n⏰ 个性化提醒等需求，用：.c 内容\n' +
   '⚠️ 当前账号为受限账号，仅可纯聊天与生活指令，不能操作服务器/文件';
+
+function botHelp(restricted) {
+  if (restricted) {
+    return HELP_HEAD_RESTRICTED + (LIFE_ENABLED ? HELP_LIFE_RESTRICTED : '') + HELP_TAIL_RESTRICTED;
+  }
+  return HELP_HEAD + (LIFE_ENABLED ? HELP_LIFE : '') + HELP_TAIL;
+}
+
+const NEED_LIFE_APP =
+  '这条指令依赖 life-app（记账 / 待办 / 塔罗 / 运势），当前未安装。\n' +
+  '把 life-app 放到 /opt/life-app 或 /root/life-app，或用 LIFE_APP_DIR 指定路径后重启即可。';
 
 /* ---------------- 文件与目录 ---------------- */
 function readTextFile(p) {
@@ -555,7 +589,7 @@ function handleMessage(data) {
 
   let text = stripMentionKeys(rawText, message.mentions).trim();
   if (!text) {
-    deliver({ kind: 'reply', id: messageId, fallbackChatId: chatId }, BOT_HELP);
+    deliver({ kind: 'reply', id: messageId, fallbackChatId: chatId }, botHelp(false));
     return;
   }
   if (text.length > 4000) {
@@ -579,7 +613,7 @@ function handleMessage(data) {
     return;
   }
   if (/^\.help$/i.test(text)) {
-    deliver(replyTarget, restricted ? BOT_HELP_RESTRICTED : BOT_HELP);
+    deliver(replyTarget, botHelp(restricted));
     return;
   }
   if (/^\.(?:rand|r)(?:\s|$)/i.test(text)) {
@@ -587,32 +621,35 @@ function handleMessage(data) {
     return;
   }
   if (/^\.(?:tarot|t)$/i.test(text)) {
-    deliver(replyTarget, tarotText());
+    deliver(replyTarget, LIFE_ENABLED ? tarotText() : NEED_LIFE_APP);
     return;
   }
   if (/^(?:\.fortune|\.f|今日运势)$/i.test(text)) {
-    startFortuneCommand(replyTarget, ids, key, life, restricted);
+    if (!LIFE_ENABLED) deliver(replyTarget, NEED_LIFE_APP);
+    else startFortuneCommand(replyTarget, ids, key, life, restricted);
     return;
   }
 
-  try {
-    const lifeReply = LIFE_ACTIONS.handle(text, life);
-    if (lifeReply) {
-      writeLog('info', '生活指令已处理', {
-        openId: ids[0],
-        lifeKey: life,
-        group: isGroup,
-        action: text.slice(0, 60),
-      });
-      deliver(replyTarget, lifeReply);
+  if (LIFE_ENABLED) {
+    try {
+      const lifeReply = LIFE_ACTIONS.handle(text, life);
+      if (lifeReply) {
+        writeLog('info', '生活指令已处理', {
+          openId: ids[0],
+          lifeKey: life,
+          group: isGroup,
+          action: text.slice(0, 60),
+        });
+        deliver(replyTarget, lifeReply);
+        return;
+      }
+    } catch (e) {
+      deliver(replyTarget, '生活指令处理失败：' + (e && e.message ? e.message : String(e)));
       return;
     }
-  } catch (e) {
-    deliver(replyTarget, '生活指令处理失败：' + (e && e.message ? e.message : String(e)));
-    return;
   }
 
-  deliver(replyTarget, restricted ? BOT_HELP_RESTRICTED : BOT_HELP);
+  deliver(replyTarget, botHelp(restricted));
 }
 
 function extractCodexPrompt(text) {
@@ -1190,6 +1227,9 @@ if (!SIMULATE_EVENT && (!APP_ID || !APP_SECRET)) {
 
 if (!ALLOW_USERS.length && !ALLOW_CHATS.length) {
   console.error('警告：FEISHU_ALLOW_USERS / FEISHU_ALLOW_CHATS 未配置，机器人只会回报发送者身份，不会执行任何操作。');
+}
+if (!LIFE_ENABLED) {
+  console.warn('提示：未找到 life-app，记账 / 待办 / 塔罗 / 运势 指令已停用。');
 }
 
 writeLog('info', 'feishu-bot 已启动', {
