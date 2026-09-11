@@ -135,3 +135,7 @@ https://log.tykrem.top/ ，来源 `feishu-bot`，保留 30 天。
 机器人以 root 运行，且对被允许的用户开放 Codex 全自动执行命令。
 请只把可信的人加入 `FEISHU_ALLOW_USERS`；对外部人员用 `FEISHU_RESTRICTED_USERS`
 （纯聊天，无本机权限）。
+
+## License
+
+MIT
