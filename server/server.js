@@ -182,20 +182,20 @@ const GUEST_PROMPT_TAIL =
 /* ---------------- 帮助文本 ---------------- */
 // 塔罗 / 运势 / 记账 / 待办 依赖可选的 life-app，没装就不列出来
 const HELP_HEAD =
-  '🔧 现成指令：\n' +
-  '· .help 显示本帮助\n' +
-  '· .codex 内容 / .c 内容 调用 Codex 处理\n' +
-  '· .rand / .r 3d10 投骰子（支持 2d6+1、d20）\n' +
-  (LIFE_ENABLED ? '· .tarot / .t 抽一张塔罗牌并解读\n· .fortune / .f 今日运势（每天算一次，之后返回缓存）\n' : '') +
-  '· 所有指令开头的 . 都可以换成 。（如 。help、。rand 3d10）';
+  '🔧 现成指令（前缀 . 可省略）：\n' +
+  '· .help / 帮助\n' +
+  '· .codex 内容 / .c 内容 —— 调用 Codex 处理\n' +
+  '· .rand 3d10 / 骰子 3d10 —— 投骰子（支持 2d6+1、d20）\n' +
+  (LIFE_ENABLED ? '· .tarot / 塔罗牌 —— 抽一张塔罗并解读\n· .fortune / 今日运势 —— 每日运势（每天算一次，之后返回缓存）\n' : '') +
+  '· 开头的 . 也可以写成 。（如 。help、。rand 3d10）';
 
 const HELP_HEAD_RESTRICTED =
-  '🔧 现成指令：\n' +
-  '· .help 显示本帮助\n' +
-  '· .c 内容 使用纯聊天助手（无系统权限）\n' +
-  '· .rand / .r 3d10 投骰子\n' +
-  (LIFE_ENABLED ? '· .tarot / .t 抽塔罗\n' : '') +
-  '· 指令开头的 . 也可用。代替';
+  '🔧 现成指令（前缀 . 可省略）：\n' +
+  '· .help / 帮助\n' +
+  '· .c 内容 —— 使用纯聊天助手（无系统权限）\n' +
+  '· .rand 3d10 / 骰子 3d10 —— 投骰子\n' +
+  (LIFE_ENABLED ? '· .tarot / 塔罗牌 —— 抽塔罗\n' : '') +
+  '· 开头的 . 也可以写成 。';
 
 const HELP_LIFE =
   '\n\n📒 记账：\n' +
@@ -612,19 +612,20 @@ function handleMessage(data) {
     startCodexTask(replyTarget, ids, key, life, restricted, codexPrompt);
     return;
   }
-  if (/^\.help$/i.test(text)) {
+  // 中文别名：帮助 / 塔罗牌 / 今日运势 / 骰子 不写前缀也能用
+  if (/^(?:\.help|help|帮助|菜单|指令)$/i.test(text)) {
     deliver(replyTarget, botHelp(restricted));
     return;
   }
-  if (/^\.(?:rand|r)(?:\s|$)/i.test(text)) {
+  if (/^(?:\.(?:rand|r)|骰子|掷骰子?|投骰子?)(?:\s|$)/i.test(text)) {
     deliver(replyTarget, rollDiceText(text));
     return;
   }
-  if (/^\.(?:tarot|t)$/i.test(text)) {
+  if (/^(?:\.(?:tarot|t)|塔罗|塔罗牌|抽塔罗|抽牌)$/i.test(text)) {
     deliver(replyTarget, LIFE_ENABLED ? tarotText() : NEED_LIFE_APP);
     return;
   }
-  if (/^(?:\.fortune|\.f|今日运势)$/i.test(text)) {
+  if (/^(?:\.fortune|\.f|运势|今日运势|今日运程|今日运气)$/i.test(text)) {
     if (!LIFE_ENABLED) deliver(replyTarget, NEED_LIFE_APP);
     else startFortuneCommand(replyTarget, ids, key, life, restricted);
     return;
@@ -658,7 +659,7 @@ function extractCodexPrompt(text) {
 }
 
 function rollDiceText(text) {
-  const body = String(text).replace(/^\.(?:rand|r)/i, '').trim();
+  const body = String(text).replace(/^(?:\.(?:rand|r)|骰子|掷骰子?|投骰子?)/i, '').trim();
   const re = /(\d+)?d(\d+)([+-]\d+)?/gi;
   const lines = [];
   let grandTotal = 0;
