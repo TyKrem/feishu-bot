@@ -1,0 +1,21 @@
+[Unit]
+Description=Feishu Codex Bridge (Lark long connection)
+After=network-online.target log-center.service
+Wants=network-online.target log-center.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+EnvironmentFile=/etc/feishu-bot.env
+WorkingDirectory=/opt/feishu-bot
+ExecStart=/opt/node/bin/node /opt/feishu-bot/server/server.js
+Restart=always
+RestartSec=5
+# 78 = EX_CONFIG：缺少应用凭据时不要无意义地反复重启
+RestartPreventExitStatus=78
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

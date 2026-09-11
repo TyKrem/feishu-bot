@@ -1,0 +1,13 @@
+{
+  "name": "feishu-codex-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "飞书 → Codex 桥接服务（长连接，无公网回调）",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.73.3"
+  }
+}
