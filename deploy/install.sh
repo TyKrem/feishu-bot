@@ -28,10 +28,8 @@ echo "==> 准备环境文件 $ENV_FILE"
 if [ ! -f "$ENV_FILE" ]; then
   cp "$SRC_DIR/deploy/feishu-bot.env.example" "$ENV_FILE"
   chmod 600 "$ENV_FILE"
-  # 若从旧 QQ 环境迁移，令牌需要手工从归档配置里取：
-  #   grep -E '^QQ_(NOTIFY|LOG)_TOKEN=' /root/archive/qq/qq-bot.env
-  echo "提示：新生成的环境文件里 FEISHU_NOTIFY_TOKEN / FEISHU_LOG_TOKEN 为空时，" >&2
-  echo "      可复用 /root/archive/qq/qq-bot.env 中的旧令牌，或让定时任务与日志中心使用新令牌。" >&2
+  echo "注意：FEISHU_NOTIFY_TOKEN 供定时任务调用内部通知接口，FEISHU_LOG_TOKEN 供日志中心写入。" >&2
+  echo "      两者留空会导致定时推送失败 / 日志不上报，请填写后再启动服务。" >&2
 else
   echo "    已存在，保持不变（不会覆盖你填写的凭据）"
 fi
