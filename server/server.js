@@ -135,15 +135,6 @@ const IMAGE_ACK_DELAY_MS = DRY_RUN ? 200 : 2500;
 const LIFE_KEY_MAP = parseKeyMap(ENV.FEISHU_LIFE_KEY_MAP);
 const LEGACY_TO_FEISHU = reverseMap(LIFE_KEY_MAP);
 
-/* ---------------- 回复随机延迟 ---------------- */
-// 解析逻辑在 lib/config.js（纯函数，可测），这里只把随机数接上
-const REPLY_DELAY = CFG.parseReplyDelay(ENV.FEISHU_REPLY_DELAY, ENV.FEISHU_REPLY_DELAY_MIN, ENV.FEISHU_REPLY_DELAY_MAX);
-
-function replyDelayMs() {
-  return CFG.pickDelayMs(REPLY_DELAY, Math.random());
-}
-/* ---------------- 回复随机延迟 end ---------------- */
-
 /* ---------------- 模型直连（受限账号纯聊天） ---------------- */
 const GUEST_CONFIG_TEXT = readTextFile('/root/.codex/config.toml');
 
@@ -712,81 +703,71 @@ async function sendImageToTarget(target, imageKey) {
 /**
  * @param {NotifyTarget} target
  * @param {string} filePath
- * @param {{ immediate?: boolean }} [opts] immediate 为真时跳过随机延迟
  * @returns {void}
  */
-function deliverImage(target, filePath, opts) {
+function deliverImage(target, filePath) {
   if (!filePath) return;
-  const delay = (opts && opts.immediate) ? 0 : replyDelayMs();
-  enqueueSend(function () {
-    return sleep(delay).then(async function () {
-      if (DRY_RUN) {
-        console.log('[dry-run] → image ' + target.kind + ':' + target.id + ' ' + path.basename(filePath));
-        return;
-      }
-      try {
-        const key = await uploadImage(filePath);
-        await sendImageToTarget(target, key);
-        writeLog('info', '图片已发送', {
-          kind: target.kind,
-          id: target.id,
-          file: path.basename(filePath),
-        });
-      } catch (e) {
-        const detail = errText(e);
-        console.error('发送图片失败：' + detail);
-        writeLog('warn', '发送图片失败', { file: path.basename(filePath), error: detail });
-      }
-    });
+  enqueueSend(async function () {
+    if (DRY_RUN) {
+      console.log('[dry-run] → image ' + target.kind + ':' + target.id + ' ' + path.basename(filePath));
+      return;
+    }
+    try {
+      const key = await uploadImage(filePath);
+      await sendImageToTarget(target, key);
+      writeLog('info', '图片已发送', {
+        kind: target.kind,
+        id: target.id,
+        file: path.basename(filePath),
+      });
+    } catch (e) {
+      const detail = errText(e);
+      console.error('发送图片失败：' + detail);
+      writeLog('warn', '发送图片失败', { file: path.basename(filePath), error: detail });
+    }
   });
 }
 
-/*
- * target: { kind: 'reply'|'chat'|'user', id }
- * opts.immediate: 主动推送不走随机延迟
- */
+// target: { kind: 'reply'|'chat'|'user', id }
 /**
  * @param {NotifyTarget} target
  * @param {string} text
- * @param {{ immediate?: boolean }} [opts] immediate 为真时跳过随机延迟
  * @returns {void}
  */
-function deliver(target, text, opts) {
+function deliver(target, text) {
   const chunks = chunkText(text, 3000).filter(function (c) { return c.length; });
   if (!chunks.length) return;
-  const delay = (opts && opts.immediate) ? 0 : replyDelayMs();
-  enqueueSend(function () {
-    return sleep(delay).then(async function () {
-      for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i];
-        if (DRY_RUN) {
-          console.log('[dry-run] → ' + target.kind + ':' + target.id + '\n' + chunk);
-          continue;
-        }
-        try {
-          if (target.kind === 'reply') await replyText(target.id, chunk);
-          else if (target.kind === 'chat') await sendTextToChat(target.id, chunk);
-          else await sendTextToUser(target.id, chunk);
-        } catch (e) {
-          const detail = errText(e);
-          console.error('飞书发送失败（' + target.kind + ':' + target.id + '）：' + detail);
-          writeLog('warn', '飞书发送失败', {
-            kind: target.kind,
-            id: target.id,
-            error: detail,
-            chunk: i + 1,
-            total: chunks.length,
-          });
-          // 回复失败时退化为按会话直发，避免消息丢失
-          if (target.kind === 'reply' && target.fallbackChatId) {
-            try { await sendTextToChat(target.fallbackChatId, chunk); } catch (e2) {}
-          } else {
-            break;
-          }
-        }
-        if (i + 1 < chunks.length) await sleep(300);
+  enqueueSend(async function () {
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      if (DRY_RUN) {
+        console.log('[dry-run] → ' + target.kind + ':' + target.id + '\n' + chunk);
+        continue;
       }
-    });
+      try {
+        if (target.kind === 'reply') await replyText(target.id, chunk);
+        else if (target.kind === 'chat') await sendTextToChat(target.id, chunk);
+        else await sendTextToUser(target.id, chunk);
+      } catch (e) {
+        const detail = errText(e);
+        console.error('飞书发送失败（' + target.kind + ':' + target.id + '）：' + detail);
+        writeLog('warn', '飞书发送失败', {
+          kind: target.kind,
+          id: target.id,
+          error: detail,
+          chunk: i + 1,
+          total: chunks.length,
+        });
+        // 回复失败时退化为按会话直发，避免消息丢失
+        if (target.kind === 'reply' && target.fallbackChatId) {
+          try { await sendTextToChat(target.fallbackChatId, chunk); } catch (e2) {}
+        } else {
+          break;
+        }
+      }
+      // 长消息分片之间留一点间隔，避免触发飞书发送频率限制
+      if (i + 1 < chunks.length) await sleep(300);
+    }
   });
 }
 
@@ -873,7 +854,7 @@ function handleMessage(data) {
         (ids[1] ? '你的 user_id：' + ids[1] + '\n' : '') +
         (isGroup && chatId ? '当前 chat_id：' + chatId + '\n' : '') +
         '把这行填进 /etc/feishu-bot.env 的 FEISHU_ALLOW_USERS，然后 systemctl restart feishu-bot。';
-      deliver({ kind: 'reply', id: messageId, fallbackChatId: chatId }, reply, { immediate: true });
+      deliver({ kind: 'reply', id: messageId, fallbackChatId: chatId }, reply);
       writeLog('warn', '收到未授权消息（白名单为空）', { openId: ids[0], userId: ids[1] || '', chatId: chatId });
       return;
     }
@@ -1449,7 +1430,7 @@ function startInternalNotifyServer() {
         reply(503, { error: '没有可用的飞书接收人（请配置 FEISHU_NOTIFY_USER）' });
         return;
       }
-      deliver(target, text, { immediate: true });
+      deliver(target, text);
       writeLog('info', '内部通知已发送', { length: text.length, target: target.label, kind: target.kind });
       reply(200, { ok: true });
     });
@@ -1495,7 +1476,7 @@ function startLongConnection() {
       if (!readyNotified && NOTIFY_USER) {
         readyNotified = true;
         setTimeout(function () {
-          deliver({ kind: 'user', id: NOTIFY_USER }, '✅ feishu-bot 启动完成，已上线。', { immediate: true });
+          deliver({ kind: 'user', id: NOTIFY_USER }, '✅ feishu-bot 启动完成，已上线。');
         }, 1000);
       }
     },

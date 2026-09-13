@@ -152,7 +152,6 @@ journalctl -u feishu-bot -f
 | `FEISHU_CODEX_HOME` | Codex 运行目录（会话与配置隔离） |
 | `FEISHU_MAX_ACTIVE` | 同时处理的任务数上限 |
 | `FEISHU_TURN_TIMEOUT` | 单轮超时秒数 |
-| `FEISHU_REPLY_DELAY_MIN` / `_MAX` | 被动回复随机延迟秒数，默认 0.8 ~ 2.5 |
 | `FEISHU_LOG_URL` / `FEISHU_LOG_TOKEN` | 可选，上报到自建日志中心 |
 | `FEISHU_HEALTH_LOG` | 健康时间线文件 |
 
