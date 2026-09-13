@@ -22,6 +22,34 @@ const { spawn } = require('child_process');
 const { URL } = require('url');
 const lark = require('@larksuiteoapi/node-sdk');
 const TAROT_IMAGE = require('./tarot-image.js');
+const CFG = require('./lib/config.js');
+const TXT = require('./lib/text.js');
+const IDENT = require('./lib/identity.js');
+const IMGS = require('./lib/images.js');
+const CMDS = require('./lib/commands.js');
+const UTIL = require('./lib/util.js');
+
+// 抽到 lib/ 的纯函数在这里起别名，调用点保持原样。
+// 必须放在配置块之前——别名是 const，不像原来的函数声明会提升。
+const splitList = CFG.splitList;
+const parseKeyMap = CFG.parseKeyMap;
+const reverseMap = CFG.reverseMap;
+const tomlValue = CFG.tomlValue;
+const chunkText = TXT.chunkText;
+const stripMentionKeys = TXT.stripMentionKeys;
+const extractText = TXT.extractText;
+const extractImageKeys = TXT.extractImageKeys;
+const extractCodexPrompt = TXT.extractCodexPrompt;
+const extractGuestText = TXT.extractGuestText;
+const senderIds = IDENT.senderIds;
+const matches = IDENT.matches;
+const imageKeySlug = IMGS.imageKeySlug;
+const imageExtFromType = IMGS.imageExtFromType;
+const imageStamp = IMGS.imageStamp;
+const sleep = UTIL.sleep;
+const errText = UTIL.errText;
+const tokenEqual = UTIL.tokenEqual;
+const rollDiceText = CMDS.rollDiceText;
 
 // 生活指令（记账 / 待办 / 塔罗 / 运势）由可选的 life-app 提供。
 // 找不到就降级：机器人照常工作，只是少了这几条指令。
@@ -96,90 +124,17 @@ const LIFE_KEY_MAP = parseKeyMap(ENV.FEISHU_LIFE_KEY_MAP);
 const LEGACY_TO_FEISHU = reverseMap(LIFE_KEY_MAP);
 
 /* ---------------- 回复随机延迟 ---------------- */
-function toDelaySeconds(v) {
-  const n = parseFloat(v);
-  return isFinite(n) && n >= 0 ? n : NaN;
-}
-
-function parseReplyDelay(rangeRaw, minRaw, maxRaw) {
-  let min = 0.8;
-  let max = 2.5;
-  const parts = String(rangeRaw == null ? '' : rangeRaw)
-    .split(/[^0-9.]+/)
-    .map(toDelaySeconds)
-    .filter(function (n) { return !isNaN(n); });
-  if (parts.length >= 2) { min = parts[0]; max = parts[1]; }
-  else if (parts.length === 1) { min = 0; max = parts[0]; }
-  const lo = toDelaySeconds(minRaw);
-  const hi = toDelaySeconds(maxRaw);
-  if (!isNaN(lo)) min = lo;
-  if (!isNaN(hi)) max = hi;
-  if (max < min) { const t = min; min = max; max = t; }
-  return { minMs: Math.round(min * 1000), maxMs: Math.round(max * 1000) };
-}
-
-const REPLY_DELAY = parseReplyDelay(ENV.FEISHU_REPLY_DELAY, ENV.FEISHU_REPLY_DELAY_MIN, ENV.FEISHU_REPLY_DELAY_MAX);
+// 解析逻辑在 lib/config.js（纯函数，可测），这里只把随机数接上
+const REPLY_DELAY = CFG.parseReplyDelay(ENV.FEISHU_REPLY_DELAY, ENV.FEISHU_REPLY_DELAY_MIN, ENV.FEISHU_REPLY_DELAY_MAX);
 
 function replyDelayMs() {
-  const lo = REPLY_DELAY.minMs;
-  const hi = REPLY_DELAY.maxMs;
-  if (hi <= 0) return 0;
-  if (hi <= lo) return hi;
-  return lo + Math.floor(Math.random() * (hi - lo + 1));
+  return CFG.pickDelayMs(REPLY_DELAY, Math.random());
 }
 /* ---------------- 回复随机延迟 end ---------------- */
-
-function splitList(raw) {
-  return String(raw || '')
-    .split(',')
-    .map(function (x) { return x.trim(); })
-    .filter(Boolean);
-}
-
-function parseKeyMap(raw) {
-  const out = {};
-  splitList(raw).forEach(function (pair) {
-    const i = pair.indexOf('=');
-    if (i <= 0) return;
-    const k = pair.slice(0, i).trim();
-    const v = pair.slice(i + 1).trim();
-    if (k && v) out[k] = v;
-  });
-  return out;
-}
-
-function reverseMap(map) {
-  const out = {};
-  Object.keys(map).forEach(function (k) { if (!out[map[k]]) out[map[k]] = k; });
-  return out;
-}
-
-function tokenEqual(a, b) {
-  const ha = crypto.createHash('sha256').update(String(a)).digest();
-  const hb = crypto.createHash('sha256').update(String(b)).digest();
-  return crypto.timingSafeEqual(ha, hb);
-}
-
-function sleep(ms) {
-  return new Promise(function (r) { setTimeout(r, ms); });
-}
-
-function errText(e) {
-  if (!e) return '未知错误';
-  const detail = (e.response && e.response.data && (e.response.data.msg || e.response.data.message)) || '';
-  const code = e.code || (e.response && e.response.data && e.response.data.code) || '';
-  const msg = e.message || String(e);
-  return (code ? '[' + code + '] ' : '') + (detail || msg);
-}
 
 /* ---------------- 模型直连（受限账号纯聊天） ---------------- */
 const GUEST_CONFIG_TEXT = readTextFile('/root/.codex/config.toml');
 
-function tomlValue(text, key) {
-  const re = new RegExp('^' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*=\\s*"([^"]*)"', 'm');
-  const m = re.exec(text);
-  return m ? m[1] : '';
-}
 const GUEST_API_BASE = String(ENV.FEISHU_CHAT_API_BASE_URL || ENV.CHAT_API_BASE_URL || tomlValue(GUEST_CONFIG_TEXT, 'base_url') || '').trim();
 const GUEST_API_KEY = String(ENV.FEISHU_CHAT_API_KEY || ENV.CHAT_API_KEY || tomlValue(GUEST_CONFIG_TEXT, 'experimental_bearer_token') || '').trim();
 const GUEST_MODEL = String(ENV.FEISHU_CHAT_API_MODEL || ENV.CHAT_API_MODEL || tomlValue(GUEST_CONFIG_TEXT, 'model') || '').trim();
@@ -316,10 +271,9 @@ function saveFortuneCache() {
     fs.renameSync(FORTUNE_CACHE_FILE + '.tmp', FORTUNE_CACHE_FILE);
   } catch (e) {}
 }
+// 实现在 lib/util.js（日期从外面传进去，便于测），这里保留原来的无参调用形式
 function localDateKey() {
-  const d = new Date();
-  const p = function (n) { return n < 10 ? '0' + n : '' + n; };
-  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  return UTIL.localDateKey(new Date());
 }
 
 /* ---------------- 用户图片（只登记，不主动识别） ---------------- */
@@ -346,28 +300,6 @@ function saveImageIndex() {
   } catch (e) {
     writeLog('warn', '图片索引写入失败', { error: en(e) });
   }
-}
-
-// 会话键里有 ':'（p:ou_xxx、g:oc_xxx:ou_xxx），做文件名前先换成安全字符
-function imageKeySlug(key) {
-  return String(key || 'unknown').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80);
-}
-
-function imageExtFromType(contentType) {
-  const type = String(contentType || '').split(';')[0].trim().toLowerCase();
-  if (type === 'image/png') return '.png';
-  if (type === 'image/gif') return '.gif';
-  if (type === 'image/webp') return '.webp';
-  if (type === 'image/bmp') return '.bmp';
-  if (type === 'image/heic') return '.heic';
-  return '.jpg';
-}
-
-function imageStamp(ts) {
-  const d = new Date(Number(ts) || Date.now());
-  const p = function (n) { return n < 10 ? '0' + n : '' + n; };
-  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
-    + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
 
 // 下载单张图片到 .part，再按返回的 content-type 改名，避免扩展名写错
@@ -603,14 +535,6 @@ async function pumpSendQueue() {
   sendPumping = false;
 }
 
-function chunkText(text, size) {
-  const s = String(text == null ? '' : text);
-  const limit = size || 3000;
-  const chunks = [];
-  for (let i = 0; i < s.length; i += limit) chunks.push(s.slice(i, i + limit));
-  return chunks;
-}
-
 async function sendTextToChat(chatId, text) {
   await client.im.message.create({
     params: { receive_id_type: 'chat_id' },
@@ -749,85 +673,17 @@ function deliver(target, text, opts) {
 }
 
 /* ---------------- 身份与白名单 ---------------- */
-function senderIds(sender) {
-  const sid = (sender && sender.sender_id) || {};
-  return [sid.open_id, sid.user_id, sid.union_id]
-    .map(function (x) { return String(x || '').trim(); })
-    .filter(Boolean);
-}
-
-function matches(list, ids) {
-  if (!list.length) return false;
-  return ids.some(function (id) { return list.indexOf(id) >= 0; });
-}
-
-// 生活数据主键：优先用映射（可继续沿用 QQ 时代的数据），否则用飞书 open_id
+// 生活数据主键：优先用映射（可继续沿用 QQ 时代的数据），否则用飞书 open_id。
+// 纯逻辑在 lib/identity.js，这里把运行期的映射表传进去。
 function lifeKey(ids) {
-  for (let i = 0; i < ids.length; i++) {
-    if (LIFE_KEY_MAP[ids[i]]) return LIFE_KEY_MAP[ids[i]];
-  }
-  return ids[0] || '';
+  return IDENT.lifeKey(ids, LIFE_KEY_MAP);
 }
 
 function primaryId(ids) {
-  for (let i = 0; i < ids.length; i++) {
-    if (LEGACY_TO_FEISHU[ids[i]]) return LEGACY_TO_FEISHU[ids[i]];
-  }
-  return ids[0] || '';
+  return IDENT.primaryId(ids, LEGACY_TO_FEISHU);
 }
 
 /* ---------------- 消息解析 ---------------- */
-function stripMentionKeys(text, mentions) {
-  let out = String(text || '');
-  (mentions || []).forEach(function (m) {
-    if (m && m.key) out = out.split(m.key).join(' ');
-  });
-  return out.replace(/\s+/g, ' ').trim();
-}
-
-function extractText(message) {
-  const type = String((message && message.message_type) || '');
-  let content = {};
-  try { content = JSON.parse((message && message.content) || '{}'); } catch (e) { content = {}; }
-  if (type === 'text') return String(content.text || '');
-  if (type === 'post') {
-    const parts = [];
-    if (content.title) parts.push(String(content.title));
-    (content.content || []).forEach(function (line) {
-      (line || []).forEach(function (node) {
-        if (!node) return;
-        if (node.tag === 'text' && node.text) parts.push(String(node.text));
-        else if (node.tag === 'a' && node.text) parts.push(String(node.text));
-        else if (node.tag === 'at' && node.user_id) parts.push(' ');
-      });
-      parts.push('\n');
-    });
-    return parts.join('');
-  }
-  return '';
-}
-
-// 取出消息里的图片：image 消息本身，或富文本(post)里内嵌的 img 节点
-function extractImageKeys(message) {
-  const type = String((message && message.message_type) || '');
-  let content = {};
-  try { content = JSON.parse((message && message.content) || '{}'); } catch (e) { return []; }
-  if (type === 'image') {
-    const key = String(content.image_key || '').trim();
-    return key ? [key] : [];
-  }
-  if (type === 'post') {
-    const keys = [];
-    (content.content || []).forEach(function (line) {
-      (line || []).forEach(function (node) {
-        if (node && node.tag === 'img' && node.image_key) keys.push(String(node.image_key));
-      });
-    });
-    return keys;
-  }
-  return [];
-}
-
 const seenMessages = new Map();
 function isDuplicate(messageId) {
   const id = String(messageId || '');
@@ -847,15 +703,7 @@ const IMAGE_HINT = '我现在只能读文字和图片：图片会先存下来登
   + '文件/语音这类消息麻烦改成文字描述一下。';
 
 function mentionIsBot(message) {
-  const mentions = (message && message.mentions) || [];
-  if (!mentions.length) return false;
-  if (!BOT_OPEN_ID && !BOT_NAME) return true; // 未配置机器人身份时，有 @ 即视为呼叫
-  return mentions.some(function (m) {
-    const id = (m && m.id) || {};
-    if (BOT_OPEN_ID && (id.open_id === BOT_OPEN_ID || id.user_id === BOT_OPEN_ID)) return true;
-    if (BOT_NAME && String((m && m.name) || '') === BOT_NAME) return true;
-    return false;
-  });
+  return IDENT.mentionIsBot(message, BOT_OPEN_ID, BOT_NAME);
 }
 
 /* ---------------- 消息处理 ---------------- */
@@ -977,38 +825,6 @@ function handleMessage(data) {
   }
 
   deliver(replyTarget, botHelp(restricted));
-}
-
-function extractCodexPrompt(text) {
-  const m = /^\.(?:codex|c)(?:\s+|$)/i.exec(text);
-  return m ? text.slice(m[0].length).trim() : null;
-}
-
-function rollDiceText(text) {
-  const body = String(text).replace(/^(?:\.(?:rand|r)|骰子|掷骰子?|投骰子?)/i, '').trim();
-  const re = /(\d+)?d(\d+)([+-]\d+)?/gi;
-  const lines = [];
-  let grandTotal = 0;
-  let found = false;
-  let m;
-  while ((m = re.exec(body)) !== null) {
-    found = true;
-    const count = Math.max(1, parseInt(m[1] || '1', 10) || 1);
-    const sides = parseInt(m[2], 10);
-    const bonus = parseInt(m[3] || '0', 10) || 0;
-    if (!sides || sides < 2 || count > 1000 || sides > 100000) {
-      return '.rand 参数无效，请使用例如：3d10、2d6+1、d20';
-    }
-    const rolls = [];
-    for (let i = 0; i < count; i++) rolls.push(Math.floor(Math.random() * sides) + 1);
-    const sum = rolls.reduce(function (a, b) { return a + b; }, 0) + bonus;
-    grandTotal += sum;
-    lines.push(m[0].toLowerCase() + ' → ' + rolls.join(' + ') + ' = ' + sum +
-      (bonus ? '（含调整 ' + (bonus > 0 ? '+' : '') + bonus + '）' : ''));
-  }
-  if (!found) return '🎲 用法：.rand 3d10，也支持 2d6+1、d20';
-  if (lines.length === 1) return '🎲 ' + lines[0];
-  return '🎲 ' + lines.join('\n') + '\n总计 ' + grandTotal;
 }
 
 function tarotText(card) {
@@ -1181,19 +997,6 @@ function requestGuestCompletion(payload) {
     req.on('error', reject);
     req.end(body);
   });
-}
-
-function extractGuestText(data) {
-  const out = (data && data.output) || [];
-  const parts = [];
-  out.forEach(function (item) {
-    if (item && item.type === 'message' && Array.isArray(item.content)) {
-      item.content.forEach(function (c) {
-        if (c && c.type === 'output_text' && c.text) parts.push(c.text);
-      });
-    }
-  });
-  return parts.join('\n').trim();
 }
 
 function runGuestChat(target, key, prompt) {
@@ -1396,18 +1199,7 @@ function runCodex(target, key, prompt, onText, fresh) {
 let lastEventInfo = null;
 
 function resolveNotifyTarget(body) {
-  const openId = String(body.open_id || body.openId || body.user || '').trim();
-  const chatId = String(body.chat_id || body.chatId || '').trim();
-  const legacy = String(body.qq || '').trim();
-  if (openId) return { kind: 'user', id: openId, label: openId };
-  if (chatId) return { kind: 'chat', id: chatId, label: chatId };
-  if (legacy) {
-    const mapped = LEGACY_TO_FEISHU[legacy];
-    if (mapped) return { kind: 'user', id: mapped, label: mapped };
-    if (/^ou_/.test(legacy)) return { kind: 'user', id: legacy, label: legacy };
-  }
-  if (NOTIFY_USER) return { kind: 'user', id: NOTIFY_USER, label: NOTIFY_USER };
-  return null;
+  return IDENT.resolveNotifyTarget(body, LEGACY_TO_FEISHU, NOTIFY_USER);
 }
 
 function startInternalNotifyServer() {
