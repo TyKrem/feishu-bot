@@ -13,7 +13,8 @@
 - **受限账号**：只允许纯聊天和内置指令，不启动 Codex 工具
 - **白名单**：私聊按 `open_id` 放行；白名单为空时只回报身份，不执行任何操作
 - **群聊**：需 @ 机器人 才响应，可再按 `chat_id` 加白名单
-- **内置指令**：骰子、塔罗、每日运势、记账、待办（后四项依赖可选的 life-app）
+- **内置指令**：骰子、塔罗、每日运势、记账、待办（后四项依赖可选的 life-app）、
+  任务（查看待执行的单次提醒，依赖可选的 scheduler-app）
 - **塔罗带牌面**：抽塔罗时自动附上对应牌面的图片，逆位会把图片倒过来
 - **图片只登记不识别**：直接发图先落盘并按顺序编号，你明确说要看时才让 Codex 读
 - **随机回复延迟**：避免"秒回"得像脚本
@@ -124,6 +125,7 @@ journalctl -u feishu-bot -f
 | `.tarot` / `塔罗牌` | 抽塔罗，附牌面图片 *（需 life-app）* |
 | `.fortune` / `今日运势` | 每日运势，按天缓存 *（需 life-app）* |
 | 记账 / 待办类中文 | 直接处理，不启动 Codex *（需 life-app）* |
+| `任务` / `.tasks` | 列出待执行的单次提醒（到点、剩余时间、内容）*（需 scheduler-app）* |
 | 直接发图片 | 先存盘登记（不识别），要看时说 `.c 看下第 2 张图` |
 
 常用指令**不写前缀**也能用（`帮助`、`塔罗牌`、`今日运势`、`骰子 3d10`）；
@@ -147,6 +149,7 @@ journalctl -u feishu-bot -f
 | `FEISHU_IMAGE_RETENTION_DAYS` | 收到的图片保留天数，默认 `7`，超期在清理时删除 |
 | `FEISHU_IMAGE_MAX_PER_KEY` | 每个会话最多保留多少张图片的索引，默认 `200` |
 | `LIFE_APP_DIR` | life-app 所在目录（默认依次找 `/opt/life-app`、`/root/life-app`） |
+| `SCHEDULER_APP_DIR` / `FEISHU_ONCE_DIR` | scheduler-app 目录与一次性提醒数据目录（默认 `/opt/scheduler-app`、`/opt/scheduler-app/data/once`） |
 | `FEISHU_CODEX_BIN` | Codex 可执行文件路径 |
 | `FEISHU_WORKSPACE` | Codex 工作目录，默认 `/root` |
 | `FEISHU_CODEX_HOME` | Codex 运行目录（会话与配置隔离） |
@@ -191,6 +194,15 @@ FEISHU_DRY_RUN=1 node server/server.js
 
 安装方式：把 life-app 放到 `/opt/life-app` 或 `/root/life-app`，
 或用 `LIFE_APP_DIR` 指定路径后重启。
+
+## 可选依赖 scheduler-app
+
+`任务` 关键字的数据来自同作者的 scheduler-app（`/opt/scheduler-app/data/once`
+里的一次性提醒，只有 root 读得到）。没装就只少这一条指令，
+监控页也不再展示单次提醒——要查就得在飞书里问。
+
+安装方式：把 scheduler-app 放到 `/opt/scheduler-app` 或 `/root/scheduler-app`，
+或用 `SCHEDULER_APP_DIR` 指定路径后重启。
 
 ## 塔罗牌面图片
 

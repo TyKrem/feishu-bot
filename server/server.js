@@ -58,6 +58,8 @@ const sleep = UTIL.sleep;
 const errText = UTIL.errText;
 const tokenEqual = UTIL.tokenEqual;
 const rollDiceText = CMDS.rollDiceText;
+const isOnceTasksCommand = CMDS.isOnceTasksCommand;
+const onceTasksText = CMDS.onceTasksText;
 
 // 生活指令（记账 / 待办 / 塔罗 / 运势）由可选的 life-app 提供。
 // 找不到就降级：机器人照常工作，只是少了这几条指令。
@@ -83,6 +85,27 @@ const LIFE_FORTUNE = requireLife('fortune.js');
 const LIFE_PROFILE = requireLife('profile.js');
 const LIFE_ENABLED = !!(LIFE_ACTIONS && LIFE_FORTUNE && LIFE_PROFILE);
 
+// 单次提醒数据在 scheduler-app 那边（/opt/scheduler-app/data/once）。
+// 同样按可选依赖处理：没装就只剩「任务」这一条指令不可用。
+/**
+ * @param {string} mod scheduler-app 里的模块文件名，如 'once.js'
+ * @returns {any} 模块导出；没装 scheduler-app 时返回 null
+ */
+function requireScheduler(mod) {
+  const schedDir = String(process.env.SCHEDULER_APP_DIR || '').replace(/\/+$/, '');
+  const dirs = [
+    schedDir ? schedDir + '/lib/' : '',
+    '/opt/scheduler-app/lib/',
+    '/root/scheduler-app/lib/',
+  ].filter(Boolean);
+  for (let i = 0; i < dirs.length; i++) {
+    try { return require(dirs[i] + mod); } catch (e) {}
+  }
+  return null;
+}
+const SCHED_ONCE = requireScheduler('once.js');
+const SCHED_ONCE_ENABLED = !!SCHED_ONCE;
+
 const ENV = process.env;
 
 /* ---------------- 配置 ---------------- */
@@ -96,6 +119,8 @@ const WORKSPACE = ENV.FEISHU_WORKSPACE || '/root';
 const CODEX_HOME = ENV.FEISHU_CODEX_HOME || '/root/.codex-feishu';
 const DATA_DIR = ENV.FEISHU_DATA_DIR || '/opt/feishu-bot/data';
 const THREAD_FILE = path.join(DATA_DIR, 'threads.json');
+// 「任务」关键字读的一次性提醒目录（scheduler-app 的数据目录）
+const ONCE_TASKS_DIR = String(ENV.FEISHU_ONCE_DIR || '/opt/scheduler-app/data/once');
 const MAX_ACTIVE = Math.max(1, parseInt(ENV.FEISHU_MAX_ACTIVE || '2', 10) || 2);
 const TURN_TIMEOUT = Math.max(60, parseInt(ENV.FEISHU_TURN_TIMEOUT || '900', 10) || 900);
 const LOG_ENDPOINT = ENV.FEISHU_LOG_URL || 'http://127.0.0.1:8792/api/v1/logs';
@@ -163,6 +188,7 @@ const HELP_HEAD =
   '· .help / 帮助\n' +
   '· .codex 内容 / .c 内容 —— 调用 Codex 处理\n' +
   '· .rand 3d10 / 骰子 3d10 —— 投骰子（支持 2d6+1、d20）\n' +
+  (SCHED_ONCE_ENABLED ? '· 任务 / .tasks —— 查看待执行的单次提醒\n' : '') +
   (LIFE_ENABLED ? '· .tarot / 塔罗牌 —— 抽一张塔罗并解读\n· .fortune / 今日运势 —— 每日运势（每天算一次，之后返回缓存）\n' : '') +
   '· 开头的 . 也可以写成 。（如 。help、。rand 3d10）';
 
@@ -217,6 +243,10 @@ function botHelp(restricted) {
 const NEED_LIFE_APP =
   '这条指令依赖 life-app（记账 / 待办 / 塔罗 / 运势），当前未安装。\n' +
   '把 life-app 放到 /opt/life-app 或 /root/life-app，或用 LIFE_APP_DIR 指定路径后重启即可。';
+
+const NEED_SCHEDULER_APP =
+  '这条指令依赖 scheduler-app（单次提醒），当前未安装。\n' +
+  '把 scheduler-app 放到 /opt/scheduler-app 或 /root/scheduler-app，或用 SCHEDULER_APP_DIR 指定路径后重启即可。';
 
 /* ---------------- 文件与目录 ---------------- */
 /**
@@ -925,6 +955,28 @@ function handleMessage(data) {
     else startFortuneCommand(replyTarget, ids, key, life, restricted);
     return;
   }
+  // 单次提醒只在这里看：监控页已经不下发，避免任务内容（含卡号卡密这类）公开
+  if (isOnceTasksCommand(text)) {
+    if (restricted) {
+      deliver(replyTarget, '⚠️ 受限账号不能查看任务。');
+      return;
+    }
+    if (!SCHED_ONCE_ENABLED) {
+      deliver(replyTarget, NEED_SCHEDULER_APP);
+      return;
+    }
+    let tasks = [];
+    try {
+      tasks = SCHED_ONCE.readOnceTasks(ONCE_TASKS_DIR);
+    } catch (/** @type {any} */ e) {
+      deliver(replyTarget, '单次提醒读取失败：' + errText(e));
+      writeLog('warn', '单次提醒读取失败', { openId: ids[0], error: errText(e) });
+      return;
+    }
+    writeLog('info', '查询单次提醒', { openId: ids[0], group: isGroup, count: tasks.length });
+    deliver(replyTarget, onceTasksText(tasks, Date.now()));
+    return;
+  }
 
   if (LIFE_ENABLED) {
     try {
@@ -1536,6 +1588,7 @@ if (CHECK_ONLY) {
   console.log('  Codex HOME : ' + CODEX_HOME);
   console.log('  数据目录   : ' + DATA_DIR);
   console.log('  图片目录   : ' + IMAGE_DIR + '（保留 ' + IMAGE_RETENTION_DAYS + ' 天）');
+  console.log('  单次提醒   : ' + (SCHED_ONCE_ENABLED ? ONCE_TASKS_DIR : '未找到 scheduler-app（「任务」查询停用）'));
   console.log('  内部通知   : http://' + INTERNAL_HOST + ':' + INTERNAL_PORT + '/internal/notify');
   console.log('  生活键映射 : ' + (Object.keys(LIFE_KEY_MAP).length ? JSON.stringify(LIFE_KEY_MAP) : '（空）'));
   if (problems.length) {
@@ -1572,6 +1625,9 @@ if (!ALLOW_USERS.length && !ALLOW_CHATS.length) {
 }
 if (!LIFE_ENABLED) {
   console.warn('提示：未找到 life-app，记账 / 待办 / 塔罗 / 运势 指令已停用。');
+}
+if (!SCHED_ONCE_ENABLED) {
+  console.warn('提示：未找到 scheduler-app，单次提醒查询（任务）已停用。');
 }
 
 writeLog('info', 'feishu-bot 已启动', {
