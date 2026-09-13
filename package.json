@@ -6,10 +6,15 @@
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
-    "test": "node --test server/test/"
+    "test": "node --test server/test/",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.strict.json"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.73.3",
     "jpeg-js": "^0.4.4"
+  },
+  "devDependencies": {
+    "@types/node": "^16.18.126",
+    "typescript": "^5.9.3"
   }
 }

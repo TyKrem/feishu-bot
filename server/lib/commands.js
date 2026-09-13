@@ -4,6 +4,10 @@
 
 // 骰子：支持 .rand 3d10 / 2d6+1 / d20，也认「骰子」前缀。
 // 随机数没抽出来，所以这里只测参数校验与用法提示，不断言点数。
+/**
+ * @param {unknown} text
+ * @returns {string} 要回复的文本
+ */
 function rollDiceText(text) {
   const body = String(text).replace(/^(?:\.(?:rand|r)|骰子|掷骰子?|投骰子?)/i, '').trim();
   const re = /(\d+)?d(\d+)([+-]\d+)?/gi;

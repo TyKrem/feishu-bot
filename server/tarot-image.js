@@ -57,16 +57,18 @@ function httpGet(url, opts, redirectsLeft) {
       headers: { 'User-Agent': USER_AGENT, 'Accept': '*/*' },
       timeout: 30000,
     }, function (res) {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+      // statusCode 类型上是 number | undefined，取一次并兜底
+      const status = res.statusCode || 0;
+      if (status >= 300 && status < 400 && res.headers.location) {
         res.resume();
         if ((redirectsLeft || 0) <= 0) { reject(new Error('重定向次数过多')); return; }
         httpGet(new URL(res.headers.location, url).toString(), opts, redirectsLeft - 1)
           .then(resolve, reject);
         return;
       }
-      if (res.statusCode !== 200) {
+      if (status !== 200) {
         res.resume();
-        reject(new Error('HTTP ' + res.statusCode));
+        reject(new Error('HTTP ' + status));
         return;
       }
       const chunks = [];

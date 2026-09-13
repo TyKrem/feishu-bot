@@ -577,8 +577,11 @@ async function uploadImage(filePath) {
     },
   });
   // 注意：上传图片接口的返回体是 { image_key }，不像其他接口包在 data 里
-  const key = (res && (res.image_key || (res.data && res.data.image_key))) || '';
-  if (!key) throw new Error((res && (res.msg || res.message)) || '上传图片未返回 image_key');
+  // SDK 的类型声明只覆盖了 { image_key } 这一种，但线上见过别的形状，
+  // 所以这里按 unknown 处理，几种都兜一下
+  const raw = /** @type {any} */ (res);
+  const key = (raw && (raw.image_key || (raw.data && raw.data.image_key))) || '';
+  if (!key) throw new Error((raw && (raw.msg || raw.message)) || '上传图片未返回 image_key');
   return key;
 }
 
@@ -981,13 +984,15 @@ function requestGuestCompletion(payload) {
         if (data.length > 4194304) req.destroy(new Error('模型返回内容过大'));
       });
       resp.on('end', function () {
-        if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        // statusCode 在类型上是 number | undefined，这里取一次并给个兜底
+        const status = resp.statusCode || 0;
+        if (status < 200 || status >= 300) {
           let detail = data;
           try {
             const j = JSON.parse(data);
             if (j.error && j.error.message) detail = j.error.message;
           } catch (e) {}
-          reject(new Error('模型服务错误（HTTP ' + resp.statusCode + '）：' + String(detail).slice(0, 300)));
+          reject(new Error('模型服务错误（HTTP ' + status + '）：' + String(detail).slice(0, 300)));
           return;
         }
         try { resolve(JSON.parse(data)); } catch (e) { reject(new Error('模型返回无法解析')); }
@@ -999,6 +1004,7 @@ function requestGuestCompletion(payload) {
   });
 }
 
+/** @returns {Promise<void>} */
 function runGuestChat(target, key, prompt) {
   return new Promise(function (resolve) {
     const chat = guestChats[key] || { history: [] };
@@ -1026,6 +1032,7 @@ function runGuestChat(target, key, prompt) {
 const active = new Set();
 let activeCount = 0;
 
+/** @returns {Promise<void>} */
 function runCodex(target, key, prompt, onText, fresh) {
   return new Promise(function (resolve) {
     const threadId = fresh ? null : (threads[key] || {}).threadId || null;
@@ -1153,7 +1160,8 @@ function runCodex(target, key, prompt, onText, fresh) {
     child.stdout.on('data', function (chunk) {
       buf += String(chunk);
       const lines = buf.split('\n');
-      buf = lines.pop();
+      // split 至少返回一个元素，pop 不会是 undefined，类型上标一下
+      buf = /** @type {string} */ (lines.pop());
       lines.forEach(handleLine);
     });
     child.stderr.on('data', function (chunk) {
@@ -1161,7 +1169,7 @@ function runCodex(target, key, prompt, onText, fresh) {
       stderrTail = (stderrTail + text).slice(-600);
       stderrBuf += text;
       const lines = stderrBuf.split('\n');
-      stderrBuf = lines.pop();
+      stderrBuf = /** @type {string} */ (lines.pop());
       lines.forEach(logStderrLine);
     });
     child.on('error', function (err) {

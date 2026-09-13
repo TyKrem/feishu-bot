@@ -1,6 +1,6 @@
 'use strict';
 
-const test = require('node:test');
+const { test } = require('node:test');
 const assert = require('node:assert');
 const IDENT = require('../lib/identity.js');
 
@@ -20,7 +20,7 @@ test('senderIds 取三种 id 并丢掉空值', function () {
 test('matches 空名单一律不放行', function () {
   // 这条是安全相关：白名单没配时必须拒绝，不能变成"谁都能进"
   assert.strictEqual(IDENT.matches([], ['ou_a']), false);
-  assert.strictEqual(IDENT.matches(null, ['ou_a']), false);
+  assert.strictEqual(IDENT.matches(/** @type {any} */ (null), ['ou_a']), false);
   assert.strictEqual(IDENT.matches(['ou_a'], ['ou_a']), true);
   // 三个 id 里任意一个命中即可
   assert.strictEqual(IDENT.matches(['u_1'], ['ou_a', 'u_1']), true);

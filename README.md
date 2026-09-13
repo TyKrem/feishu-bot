@@ -35,7 +35,27 @@ server/
 
 ```bash
 npm test          # 等价于 node --test server/test/
+npm run typecheck # 等价于 tsc -p tsconfig.json && tsc -p tsconfig.strict.json
 ```
+
+## 类型检查
+
+用 TypeScript 做类型检查，**源码仍是 JS，没有构建步骤**——服务跑在 Node 16 上，
+部署又是直接拷 `server/` 目录，加一道编译不划算。类型靠 JSDoc 标注，
+`allowJs` + `checkJs` 来检查。
+
+两份配置是有意分开的：
+
+| 配置 | 覆盖范围 | 严格度 |
+| --- | --- | --- |
+| `tsconfig.json` | `server/**/*.js` | `strictNullChecks` 开，`noImplicitAny` 关 |
+| `tsconfig.strict.json` | 只 `server/lib/**` | 额外开 `noImplicitAny` |
+
+`lib/` 是拆分出来的模块、边界清楚，所以一次做到底；`server.js` 还留着约 125 处
+隐式 any，先在宽松配置下慢慢补。这样两边互不阻塞，`lib/` 也不会退化。
+
+想往上加严格度时，顺序建议是：先把 `server.js` 里的隐式 any 补成 JSDoc，
+再把 `noImplicitAny` 提到第一份配置里。
 
 ```
 飞书客户端

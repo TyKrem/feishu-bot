@@ -1,0 +1,10 @@
+{
+  // server/lib/ 是刚拆出来的模块，边界清楚、也已经补完 JSDoc，
+  // 所以对它单独开到 noImplicitAny——这样以后往 lib/ 加代码不会退化。
+  // server.js 还有约 125 处隐式 any，留在宽松的那份配置里慢慢补。
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noImplicitAny": true
+  },
+  "include": ["server/lib/**/*.js"]
+}

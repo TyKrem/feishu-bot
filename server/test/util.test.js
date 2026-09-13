@@ -1,6 +1,6 @@
 'use strict';
 
-const test = require('node:test');
+const { test } = require('node:test');
 const assert = require('node:assert');
 const UTIL = require('../lib/util.js');
 
@@ -8,7 +8,7 @@ test('errText 整理错误信息', function () {
   assert.strictEqual(UTIL.errText(null), '未知错误');
   assert.strictEqual(UTIL.errText(new Error('炸了')), '炸了');
   // 带 code 的要带上
-  const withCode = new Error('bad');
+  const withCode = /** @type {Error & { code?: string }} */ (new Error('bad'));
   withCode.code = 'E_FAIL';
   assert.strictEqual(UTIL.errText(withCode), '[E_FAIL] bad');
   // 飞书 SDK 的 response.data.msg 优先于 message

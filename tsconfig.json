@@ -1,0 +1,27 @@
+{
+  // TypeScript 只当类型检查器用，不产出 JS：服务在 Node 16 上跑，
+  // 部署方式又是直接拷 server/ 目录，加构建步骤不划算。
+  // 所以这里 allowJs + checkJs，源码保持 JS，靠 JSDoc 标注类型。
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "lib": ["ES2020"],
+    "types": ["node"],
+
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    // 空值检查先开——它抓的是真隐患（statusCode、pop() 这些），
+    // 代价也小。noImplicitAny 还开着放（要补 JSDoc，server.js 那边量比较大）。
+    "strictNullChecks": true,
+    "noImplicitAny": false
+  },
+  "include": ["server/**/*.js"],
+  "exclude": ["node_modules"]
+}
