@@ -46,6 +46,12 @@ const USER_AGENT = 'feishu-bot/1.0 (+https://github.com/TyKrem/feishu-bot)';
 const API_URL = 'https://commons.wikimedia.org/w/api.php';
 const THUMB_WIDTH = 960;
 
+/**
+ * @param {string} url
+ * @param {{ binary?: boolean }} [opts] binary 为真时返回 Buffer，否则返回 utf8 文本
+ * @param {number} [redirectsLeft]
+ * @returns {Promise<any>} Buffer 或字符串
+ */
 function httpGet(url, opts, redirectsLeft) {
   const asBuffer = !!(opts && opts.binary);
   return new Promise(function (resolve, reject) {
@@ -62,7 +68,7 @@ function httpGet(url, opts, redirectsLeft) {
       if (status >= 300 && status < 400 && res.headers.location) {
         res.resume();
         if ((redirectsLeft || 0) <= 0) { reject(new Error('重定向次数过多')); return; }
-        httpGet(new URL(res.headers.location, url).toString(), opts, redirectsLeft - 1)
+        httpGet(new URL(res.headers.location, url).toString(), opts, (redirectsLeft || 0) - 1)
           .then(resolve, reject);
         return;
       }
@@ -71,6 +77,7 @@ function httpGet(url, opts, redirectsLeft) {
         reject(new Error('HTTP ' + status));
         return;
       }
+      /** @type {Buffer[]} */
       const chunks = [];
       let size = 0;
       res.on('data', function (c) {
@@ -90,6 +97,10 @@ function httpGet(url, opts, redirectsLeft) {
 }
 
 // 把牌面旋转 180°（逆位）。像素顺序整体倒置即可，不需要额外的图像库。
+/**
+ * @param {Buffer} buf JPEG 原始数据
+ * @returns {Buffer} 旋转后的 JPEG
+ */
 function rotate180(buf) {
   const raw = jpeg.decode(buf, { useTArray: true });
   const px = raw.width * raw.height;
@@ -105,9 +116,15 @@ function rotate180(buf) {
   return jpeg.encode({ data: out, width: raw.width, height: raw.height }, 85).data;
 }
 
+/** @type {Record<string, string>|null} */
 let urlMapCache = null;
 
 // 通过 Commons API 把文件名换成实际下载地址，结果落盘复用
+/**
+ * @param {string} cacheDir
+ * @param {(msg: string) => void} [log]
+ * @returns {Promise<Record<string, string>>} 文件名 → 下载地址
+ */
 async function resolveUrls(cacheDir, log) {
   if (urlMapCache) return urlMapCache;
   const cacheFile = path.join(cacheDir, 'urls.json');
@@ -126,6 +143,7 @@ async function resolveUrls(cacheDir, log) {
   const body = await httpGet(url, {}, 3);
   const data = JSON.parse(body);
   const pages = (data.query && data.query.pages) || {};
+  /** @type {Record<string, string>} */
   const map = {};
   Object.keys(pages).forEach(function (k) {
     const p = pages[k];
@@ -145,6 +163,10 @@ async function resolveUrls(cacheDir, log) {
  * opts: { index, reversed, cacheDir, log }
  * 返回本地图片绝对路径；任何一步失败都返回 null（调用方降级成纯文字）。
  */
+/**
+ * @param {{ index?: number, reversed?: boolean, cacheDir: string, log?: (msg: string) => void }} opts
+ * @returns {Promise<string|null>} 本地图片绝对路径
+ */
 async function getTarotImage(opts) {
   const index = Number(opts && opts.index);
   const reversed = !!(opts && opts.reversed);
@@ -161,7 +183,7 @@ async function getTarotImage(opts) {
 
   try {
     fs.mkdirSync(cacheDir, { recursive: true });
-  } catch (e) {
+  } catch (/** @type {any} */ e) {
     if (typeof log === 'function') log('无法创建缓存目录：' + e.message);
     return null;
   }
@@ -180,7 +202,7 @@ async function getTarotImage(opts) {
       log('牌面已缓存：' + path.basename(localFile) + '（' + Math.round(buf.length / 1024) + 'KB）');
     }
     return localFile;
-  } catch (e) {
+  } catch (/** @type {any} */ e) {
     if (typeof log === 'function') log('获取牌面失败（' + file + '）：' + e.message);
     return null;
   }

@@ -16,11 +16,9 @@
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-
-    // 空值检查先开——它抓的是真隐患（statusCode、pop() 这些），
-    // 代价也小。noImplicitAny 还开着放（要补 JSDoc，server.js 那边量比较大）。
-    "strictNullChecks": true,
-    "noImplicitAny": false
+    // 全量 strict。原来的渐进路线（先只对 lib/ 开 noImplicitAny）已经走完，
+    // 现在整个 server/ 都标了 JSDoc，不需要再分两份配置。
+    "strict": true
   },
   "include": ["server/**/*.js"],
   "exclude": ["node_modules"]

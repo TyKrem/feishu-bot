@@ -5,7 +5,17 @@
 // server.js 里保留同名薄包装，调用点不用改。
 
 /**
- * @typedef {{ kind: 'user'|'chat'|'reply', id: string, label: string }} NotifyTarget
+ * 发送目标。三种形态：
+ *   user   —— 私聊发给人，id 是 open_id
+ *   chat   —— 发到群，id 是 chat_id
+ *   reply  —— 回复某条消息，id 是 message_id；回复失败时可用 fallbackChatId 兜底
+ * label 只用于日志，reply 类目标没有。
+ * @typedef {{
+ *   kind: 'user'|'chat'|'reply',
+ *   id: string,
+ *   label?: string,
+ *   fallbackChatId?: string
+ * }} NotifyTarget
  */
 
 // 一个发送者可能有三种 id，去重前先都取出来

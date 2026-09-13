@@ -29,6 +29,14 @@ const IMGS = require('./lib/images.js');
 const CMDS = require('./lib/commands.js');
 const UTIL = require('./lib/util.js');
 
+// 类型别名：跨模块的形状从 lib/ 引，本文件自己的状态在这里定义
+/** @typedef {import('./lib/identity.js').NotifyTarget} NotifyTarget */
+/** @typedef {{ threadId: string|null, updatedAt?: number }} ThreadRef */
+/** @typedef {{ role: string, content: string }} ChatMessage */
+/** @typedef {{ history: ChatMessage[] }} GuestChat */
+/** @typedef {{ n: number, file: string, messageId: string, imageKey: string, openId: string, chatId: string, savedAt: number, bytes: number }} ImageItem */
+/** @typedef {{ seq: Record<string, number>, items: Record<string, ImageItem[]> }} ImageIndex */
+
 // 抽到 lib/ 的纯函数在这里起别名，调用点保持原样。
 // 必须放在配置块之前——别名是 const，不像原来的函数声明会提升。
 const splitList = CFG.splitList;
@@ -53,6 +61,10 @@ const rollDiceText = CMDS.rollDiceText;
 
 // 生活指令（记账 / 待办 / 塔罗 / 运势）由可选的 life-app 提供。
 // 找不到就降级：机器人照常工作，只是少了这几条指令。
+/**
+ * @param {string} mod life-app 里的模块文件名，如 'actions.js'
+ * @returns {any} 模块导出；没装 life-app 时返回 null
+ */
 function requireLife(mod) {
   const lifeDir = String(process.env.LIFE_APP_DIR || '').replace(/\/+$/, '');
   const dirs = [
@@ -200,6 +212,10 @@ const HELP_TAIL_RESTRICTED =
   '\n\n⏰ 个性化提醒等需求，用：.c 内容\n' +
   '⚠️ 当前账号为受限账号，仅可纯聊天与生活指令，不能操作服务器/文件';
 
+/**
+ * @param {boolean} restricted 是否受限账号（只能纯聊天与生活指令）
+ * @returns {string}
+ */
 function botHelp(restricted) {
   if (restricted) {
     return HELP_HEAD_RESTRICTED + (LIFE_ENABLED ? HELP_LIFE_RESTRICTED : '') + HELP_TAIL_RESTRICTED;
@@ -212,6 +228,10 @@ const NEED_LIFE_APP =
   '把 life-app 放到 /opt/life-app 或 /root/life-app，或用 LIFE_APP_DIR 指定路径后重启即可。';
 
 /* ---------------- 文件与目录 ---------------- */
+/**
+ * @param {string} p
+ * @returns {string} 读不到返回空串
+ */
 function readTextFile(p) {
   try { return fs.readFileSync(p, 'utf8'); } catch (e) { return ''; }
 }
@@ -229,12 +249,13 @@ function ensureDirs() {
       fs.writeFileSync(path.join(CODEX_HOME, 'config.toml'), cfg, { mode: 0o600 });
     }
     try { fs.copyFileSync('/root/.codex/models.json', path.join(CODEX_HOME, 'models.json')); } catch (e) {}
-  } catch (e) {
+  } catch (/** @type {any} */ e) {
     console.error('prepare codex home failed:', e.message);
   }
 }
 
 /* ---------------- 线程存储 ---------------- */
+/** @type {Record<string, ThreadRef>} */
 let threads = {};
 function loadThreads() {
   try { threads = JSON.parse(fs.readFileSync(THREAD_FILE, 'utf8')); } catch (e) { threads = {}; }
@@ -248,6 +269,7 @@ function saveThreads() {
 
 /* ---------------- 受限纯聊天存储 ---------------- */
 const GUEST_CHAT_FILE = path.join(DATA_DIR, 'guest-chats.json');
+/** @type {Record<string, GuestChat>} */
 let guestChats = {};
 function loadGuestChats() {
   try { guestChats = JSON.parse(fs.readFileSync(GUEST_CHAT_FILE, 'utf8')); } catch (e) { guestChats = {}; }
@@ -261,6 +283,7 @@ function saveGuestChats() {
 
 /* ---------------- 今日运势缓存 ---------------- */
 const FORTUNE_CACHE_FILE = path.join(DATA_DIR, 'fortune-cache.json');
+/** @type {Record<string, Record<string, string>>} */
 let fortuneCache = {};
 function loadFortuneCache() {
   try { fortuneCache = JSON.parse(fs.readFileSync(FORTUNE_CACHE_FILE, 'utf8')); } catch (e) { fortuneCache = {}; }
@@ -278,6 +301,7 @@ function localDateKey() {
 
 /* ---------------- 用户图片（只登记，不主动识别） ---------------- */
 // 索引结构：{ seq: { 会话键: 已分配的最大编号 }, items: { 会话键: [条目] } }
+/** @type {ImageIndex} */
 let imageIndex = { seq: {}, items: {} };
 
 function loadImageIndex() {
@@ -303,6 +327,12 @@ function saveImageIndex() {
 }
 
 // 下载单张图片到 .part，再按返回的 content-type 改名，避免扩展名写错
+/**
+ * @param {string} messageId
+ * @param {string} imageKey
+ * @param {string} partPath
+ * @returns {Promise<string>} content-type
+ */
 function fetchImageToFile(messageId, imageKey, partPath) {
   return client.im.messageResource.get({
     params: { type: 'image' },
@@ -316,19 +346,32 @@ function fetchImageToFile(messageId, imageKey, partPath) {
   });
 }
 
+/**
+ * @param {string} key 会话键
+ * @returns {void}
+ */
 function trimImageItems(key) {
   const list = imageIndex.items[key] || [];
   while (list.length > IMAGE_PER_KEY_LIMIT) {
-    const old = list.shift();
+    // 循环条件保证列非空，shift 不会返回 undefined
+    const old = /** @type {ImageItem} */ (list.shift());
     try { fs.unlinkSync(path.join(IMAGE_DIR, old.file)); } catch (e) {}
   }
   imageIndex.items[key] = list;
 }
 
 // 连发图片时合并回执：同一会话 N 秒内的图片只回一条
+/** @type {Record<string, { target: NotifyTarget, first: number, last: number, count: number }>} */
 const pendingImageAck = {};
+/** @type {Record<string, ReturnType<typeof setTimeout>>} */
 const pendingImageAckTimer = {};
 
+/**
+ * @param {NotifyTarget} target
+ * @param {string} key 会话键
+ * @param {number} seq 本次分配的编号
+ * @returns {void}
+ */
 function scheduleImageAck(target, key, seq) {
   const state = pendingImageAck[key] || { target: target, first: seq, last: seq, count: 0 };
   state.target = target;
@@ -351,6 +394,13 @@ function scheduleImageAck(target, key, seq) {
 }
 
 // 登记一批图片：编号先按到达顺序分配，保证多张图序号稳定
+/**
+ * @param {any} message 飞书事件里的 message
+ * @param {string[]} ids
+ * @param {string} key 会话键
+ * @param {NotifyTarget} target
+ * @returns {void}
+ */
 function registerImages(message, ids, key, target) {
   const imageKeys = extractImageKeys(message);
   if (!imageKeys.length) return;
@@ -361,7 +411,8 @@ function registerImages(message, ids, key, target) {
   try { fs.mkdirSync(dayDir, { recursive: true }); } catch (e) {}
 
   imageKeys.forEach(function (imageKey) {
-    const seq = (parseInt(imageIndex.seq[key], 10) || 0) + 1;
+    // 索引里存的是数字，parseInt 要字符串，先转一下（容错行为不变）
+    const seq = (parseInt(String(imageIndex.seq[key]), 10) || 0) + 1;
     imageIndex.seq[key] = seq;
     const base = path.join(dayDir, imageKeySlug(key) + '_' + seq);
     const partPath = base + '.part';
@@ -399,6 +450,10 @@ function registerImages(message, ids, key, target) {
 }
 
 // 交给 Codex 的图片上下文：只有编号、时间、路径，不含图片内容
+/**
+ * @param {string} key 会话键
+ * @returns {string} 拼好的提示文本，没有图片返回空串
+ */
 function imageContextText(key) {
   const list = imageIndex.items[key] || [];
   if (!list.length) return '';
@@ -411,13 +466,17 @@ function imageContextText(key) {
 }
 
 // 清理：只删超出保留周期的图片，未过期的一律保留
+/** @returns {number} 清理掉的条目数 */
 function cleanupImages() {
   const cutoff = Date.now() - IMAGE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
   let removed = 0;
+  /** @type {Record<string, ImageItem[]>} */
   const keptItems = {};
+  /** @type {Record<string, boolean>} */
   const keptFiles = {};
 
   Object.keys(imageIndex.items).forEach(function (key) {
+    /** @type {ImageItem[]} */
     const kept = [];
     (imageIndex.items[key] || []).forEach(function (it) {
       const filePath = path.join(IMAGE_DIR, String(it.file || ''));
@@ -434,6 +493,7 @@ function cleanupImages() {
   imageIndex.items = keptItems;
 
   // 兜底：清掉索引之外的历史文件（比如下载中断的 .part），未过期的跳过
+  /** @type {string[]} */
   let dayDirs = [];
   try { dayDirs = fs.readdirSync(IMAGE_DIR); } catch (e) { dayDirs = []; }
   dayDirs.forEach(function (name) {
@@ -464,6 +524,12 @@ function cleanupImages() {
 }
 
 /* ---------------- 日志上报 ---------------- */
+/**
+ * @param {string} level info / warn / error / debug
+ * @param {string} message
+ * @param {Record<string, any>} [meta]
+ * @returns {void}
+ */
 function writeLog(level, message, meta) {
   const payload = JSON.stringify({
     source: 'feishu-bot',
@@ -488,15 +554,22 @@ function writeLog(level, message, meta) {
 /* ---------------- 健康时间线 ---------------- */
 const HEALTH_LOG = ENV.FEISHU_HEALTH_LOG || '/var/log/feishu-bot-health.log';
 
+/** @returns {string} 带时区偏移的本地时间戳 */
 function healthTs() {
   const d = new Date();
   const off = -d.getTimezoneOffset();
+  /** @param {number} n */
   const p = function (n) { return n < 10 ? '0' + n : '' + n; };
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
     + 'T' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds())
     + (off >= 0 ? '+' : '-') + p(Math.floor(Math.abs(off) / 60)) + p(Math.abs(off) % 60);
 }
 
+/**
+ * @param {string} message
+ * @param {Record<string, any>} [meta]
+ * @returns {void}
+ */
 function healthLog(message, meta) {
   try {
     const line = healthTs() + ' ' + message
@@ -516,9 +589,14 @@ const client = new lark.Client({
 });
 
 /* ---------------- 发送队列（串行 + 限速） ---------------- */
+/** @type {Array<() => Promise<any>>} */
 const sendQueue = [];
 let sendPumping = false;
 
+/**
+ * @param {() => Promise<any>} job
+ * @returns {void}
+ */
 function enqueueSend(job) {
   sendQueue.push(job);
   pumpSendQueue();
@@ -528,13 +606,19 @@ async function pumpSendQueue() {
   if (sendPumping) return;
   sendPumping = true;
   while (sendQueue.length) {
-    const job = sendQueue.shift();
+    // 循环条件保证队列非空
+    const job = /** @type {() => Promise<any>} */ (sendQueue.shift());
     try { await job(); } catch (e) {}
     if (sendQueue.length) await sleep(300);
   }
   sendPumping = false;
 }
 
+/**
+ * @param {string} chatId
+ * @param {string} text
+ * @returns {Promise<any>}
+ */
 async function sendTextToChat(chatId, text) {
   await client.im.message.create({
     params: { receive_id_type: 'chat_id' },
@@ -546,6 +630,11 @@ async function sendTextToChat(chatId, text) {
   });
 }
 
+/**
+ * @param {string} openId
+ * @param {string} text
+ * @returns {Promise<any>}
+ */
 async function sendTextToUser(openId, text) {
   await client.im.message.create({
     params: { receive_id_type: 'open_id' },
@@ -557,6 +646,11 @@ async function sendTextToUser(openId, text) {
   });
 }
 
+/**
+ * @param {string} messageId
+ * @param {string} text
+ * @returns {Promise<any>}
+ */
 async function replyText(messageId, text) {
   await client.im.message.reply({
     path: { message_id: messageId },
@@ -569,6 +663,10 @@ async function replyText(messageId, text) {
 
 /* ---------------- 图片发送 ---------------- */
 // 上传到飞书换取 image_key（需要 im:resource 权限）
+/**
+ * @param {string} filePath
+ * @returns {Promise<string>} image_key
+ */
 async function uploadImage(filePath) {
   const res = await client.im.image.create({
     data: {
@@ -585,6 +683,11 @@ async function uploadImage(filePath) {
   return key;
 }
 
+/**
+ * @param {NotifyTarget} target
+ * @param {string} imageKey
+ * @returns {Promise<void>}
+ */
 async function sendImageToTarget(target, imageKey) {
   const content = JSON.stringify({ image_key: imageKey });
   if (target.kind === 'reply') {
@@ -606,6 +709,12 @@ async function sendImageToTarget(target, imageKey) {
 }
 
 // 发送本地图片；失败只记日志，不影响已经发出的文字
+/**
+ * @param {NotifyTarget} target
+ * @param {string} filePath
+ * @param {{ immediate?: boolean }} [opts] immediate 为真时跳过随机延迟
+ * @returns {void}
+ */
 function deliverImage(target, filePath, opts) {
   if (!filePath) return;
   const delay = (opts && opts.immediate) ? 0 : replyDelayMs();
@@ -635,6 +744,12 @@ function deliverImage(target, filePath, opts) {
 /*
  * target: { kind: 'reply'|'chat'|'user', id }
  * opts.immediate: 主动推送不走随机延迟
+ */
+/**
+ * @param {NotifyTarget} target
+ * @param {string} text
+ * @param {{ immediate?: boolean }} [opts] immediate 为真时跳过随机延迟
+ * @returns {void}
  */
 function deliver(target, text, opts) {
   const chunks = chunkText(text, 3000).filter(function (c) { return c.length; });
@@ -678,16 +793,28 @@ function deliver(target, text, opts) {
 /* ---------------- 身份与白名单 ---------------- */
 // 生活数据主键：优先用映射（可继续沿用 QQ 时代的数据），否则用飞书 open_id。
 // 纯逻辑在 lib/identity.js，这里把运行期的映射表传进去。
+/**
+ * @param {string[]} ids
+ * @returns {string} 生活数据主键
+ */
 function lifeKey(ids) {
   return IDENT.lifeKey(ids, LIFE_KEY_MAP);
 }
 
+/**
+ * @param {string[]} ids
+ * @returns {string} 飞书身份
+ */
 function primaryId(ids) {
   return IDENT.primaryId(ids, LEGACY_TO_FEISHU);
 }
 
 /* ---------------- 消息解析 ---------------- */
 const seenMessages = new Map();
+/**
+ * @param {unknown} messageId
+ * @returns {boolean} 是否重复（首次见到会记录下来）
+ */
 function isDuplicate(messageId) {
   const id = String(messageId || '');
   if (!id) return false;
@@ -705,11 +832,20 @@ function isDuplicate(messageId) {
 const IMAGE_HINT = '我现在只能读文字和图片：图片会先存下来登记，等你说要看时我才读；'
   + '文件/语音这类消息麻烦改成文字描述一下。';
 
+/**
+ * @param {any} message
+ * @returns {boolean}
+ */
 function mentionIsBot(message) {
   return IDENT.mentionIsBot(message, BOT_OPEN_ID, BOT_NAME);
 }
 
 /* ---------------- 消息处理 ---------------- */
+/**
+ * 处理一条飞书事件：去重 → 权限 → 指令分发 → Codex / 生活指令
+ * @param {any} data 事件体（{ sender, message }）
+ * @returns {void}
+ */
 function handleMessage(data) {
   const message = (data && data.message) || {};
   const sender = (data && data.sender) || {};
@@ -747,6 +883,7 @@ function handleMessage(data) {
 
   const rawText = extractText(message);
   const messageType = String(message.message_type || '');
+  /** @type {NotifyTarget} */
   const replyTarget = { kind: 'reply', id: messageId, fallbackChatId: chatId };
   const restricted = matches(RESTRICTED_USERS, ids);
   const key = isGroup ? 'g:' + chatId + ':' + ids[0] : 'p:' + ids[0];
@@ -821,7 +958,7 @@ function handleMessage(data) {
         deliver(replyTarget, lifeReply);
         return;
       }
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       deliver(replyTarget, '生活指令处理失败：' + (e && e.message ? e.message : String(e)));
       return;
     }
@@ -830,6 +967,10 @@ function handleMessage(data) {
   deliver(replyTarget, botHelp(restricted));
 }
 
+/**
+ * @param {any} [card] 不传就现抽一张
+ * @returns {string}
+ */
 function tarotText(card) {
   const c = card || LIFE_FORTUNE.pickTarot();
   const meaning = c.reversed ? c.rev : c.up;
@@ -839,6 +980,10 @@ function tarotText(card) {
 }
 
 // 抽牌：先回文字（牌名 + 解读），再把牌面图片发过去
+/**
+ * @param {NotifyTarget} target
+ * @returns {void}
+ */
 function sendTarot(target) {
   const card = LIFE_FORTUNE.pickTarot();
   deliver(target, tarotText(card));
@@ -847,7 +992,7 @@ function sendTarot(target) {
     index: card.index,
     reversed: card.reversed,
     cacheDir: TAROT_CACHE_DIR,
-    log: function (msg) { writeLog('info', '塔罗牌面', { message: msg }); },
+    log: /** @param {string} msg */ function (msg) { writeLog('info', '塔罗牌面', { message: msg }); },
   }).then(function (file) {
     if (file) {
       deliverImage(target, file);
@@ -859,6 +1004,14 @@ function sendTarot(target) {
   });
 }
 
+/**
+ * @param {NotifyTarget} target
+ * @param {string[]} ids
+ * @param {string} key 会话键
+ * @param {string} life 生活数据主键
+ * @param {boolean} restricted
+ * @returns {void}
+ */
 function startFortuneCommand(target, ids, key, life, restricted) {
   const date = localDateKey();
   const cached = fortuneCache[date] && fortuneCache[date][life];
@@ -885,7 +1038,7 @@ function startFortuneCommand(target, ids, key, life, restricted) {
     '今天是 ' + date + '。' +
     (birth ? '用户出生信息：' + birth + '。' : '') +
     '请计算今日运势，输出简体中文，包含综合运势、事业/学习、感情、健康、幸运色与幸运数字，语气温和务实，不超过 200 字。';
-  runCodex(target, fortuneKey, prompt, function (text) {
+  runCodex(target, fortuneKey, prompt, /** @param {string} text */ function (text) {
     if (text) {
       if (!fortuneCache[date]) fortuneCache[date] = {};
       fortuneCache[date][life] = text;
@@ -898,6 +1051,15 @@ function startFortuneCommand(target, ids, key, life, restricted) {
   });
 }
 
+/**
+ * @param {NotifyTarget} target
+ * @param {string[]} ids
+ * @param {string} key 会话键
+ * @param {string} life 生活数据主键
+ * @param {boolean} restricted
+ * @param {string} prompt
+ * @returns {void}
+ */
 function startCodexTask(target, ids, key, life, restricted, prompt) {
   writeLog('info', '收到飞书消息', {
     openId: ids[0],
@@ -933,9 +1095,13 @@ function startCodexTask(target, ids, key, life, restricted, prompt) {
 }
 
 /* ---------------- 受限纯聊天（不执行系统命令） ---------------- */
+/**
+ * @param {ChatMessage[]} history
+ * @returns {any} 发给模型接口的请求体
+ */
 function buildGuestPayload(history) {
   const sys = { role: 'system', content: [{ type: 'input_text', text: GUEST_PROMPT_TAIL }] };
-  const mapped = history.map(function (m) {
+  const mapped = history.map(/** @param {ChatMessage} m */ function (m) {
     const isAssistant = m.role === 'assistant';
     return {
       role: isAssistant ? 'assistant' : 'user',
@@ -950,6 +1116,10 @@ function buildGuestPayload(history) {
   };
 }
 
+/**
+ * @param {any} payload
+ * @returns {Promise<any>} 模型返回体
+ */
 function requestGuestCompletion(payload) {
   return new Promise(function (resolve, reject) {
     if (!GUEST_API_BASE || !GUEST_API_KEY || !GUEST_MODEL) {
@@ -1004,7 +1174,12 @@ function requestGuestCompletion(payload) {
   });
 }
 
-/** @returns {Promise<void>} */
+/**
+ * @param {NotifyTarget} target
+ * @param {string} key 会话键
+ * @param {string} prompt
+ * @returns {Promise<void>}
+ */
 function runGuestChat(target, key, prompt) {
   return new Promise(function (resolve) {
     const chat = guestChats[key] || { history: [] };
@@ -1032,7 +1207,14 @@ function runGuestChat(target, key, prompt) {
 const active = new Set();
 let activeCount = 0;
 
-/** @returns {Promise<void>} */
+/**
+ * @param {NotifyTarget} target
+ * @param {string} key 会话键
+ * @param {string} prompt
+ * @param {(text: string) => void} [onText] 拿到本轮文本时的回调（用于缓存运势）
+ * @param {boolean} [fresh] 为真时开新会话，不续用已有 thread
+ * @returns {Promise<void>}
+ */
 function runCodex(target, key, prompt, onText, fresh) {
   return new Promise(function (resolve) {
     const threadId = fresh ? null : (threads[key] || {}).threadId || null;
@@ -1044,6 +1226,7 @@ function runCodex(target, key, prompt, onText, fresh) {
       args.push('exec', '--json', '--skip-git-repo-check', FULL_AUTO_ARG, '-C', WORKSPACE, '--', codexPrompt);
     }
 
+    /** @type {import('child_process').ChildProcess} */
     let child;
     try {
       child = spawn(CODEX_BIN, args, {
@@ -1056,7 +1239,7 @@ function runCodex(target, key, prompt, onText, fresh) {
           NO_COLOR: '1',
         }),
       });
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       deliver(target, '无法启动 Codex：' + e.message);
       writeLog('error', 'Codex 启动失败', { error: e.message });
       resolve();
@@ -1066,12 +1249,14 @@ function runCodex(target, key, prompt, onText, fresh) {
     let buf = '';
     let stderrBuf = '';
     let stderrTail = '';
+    /** @type {string[]} */
     let agentParts = [];
     let done = false;
     let finished = false;
     let currentThread = threadId;
     const timer = setTimeout(function () { killChild('处理超时'); }, TURN_TIMEOUT * 1000);
 
+    /** @param {string} [reason] */
     function killChild(reason) {
       if (finished) return;
       try { if (child.pid) process.kill(-child.pid, 'SIGKILL'); } catch (e) {}
@@ -1100,6 +1285,7 @@ function runCodex(target, key, prompt, onText, fresh) {
       resolve();
     }
 
+    /** @param {string} line */
     function handleLine(line) {
       if (!line.trim()) return;
       let ev;
@@ -1137,6 +1323,7 @@ function runCodex(target, key, prompt, onText, fresh) {
         default:
           break;
       }
+      /** @type {Record<string, any>} */
       const logMeta = { key: key, thread: currentThread || threadId || null, type: ev.type };
       if (ev.item && typeof ev.item === 'object') {
         logMeta.itemType = ev.item.type || '';
@@ -1146,6 +1333,7 @@ function runCodex(target, key, prompt, onText, fresh) {
       writeLog('debug', 'Codex 输出', logMeta);
     }
 
+    /** @param {string} text */
     function logStderrLine(text) {
       const t = String(text || '').trim();
       if (!t) return;
@@ -1157,14 +1345,17 @@ function runCodex(target, key, prompt, onText, fresh) {
       });
     }
 
-    child.stdout.on('data', function (chunk) {
+    // stdio 里 stdout/stderr 都指定了 pipe，不会是 null，标注一下
+    const childStdout = /** @type {import('stream').Readable} */ (child.stdout);
+    const childStderr = /** @type {import('stream').Readable} */ (child.stderr);
+    childStdout.on('data', function (chunk) {
       buf += String(chunk);
       const lines = buf.split('\n');
       // split 至少返回一个元素，pop 不会是 undefined，类型上标一下
       buf = /** @type {string} */ (lines.pop());
       lines.forEach(handleLine);
     });
-    child.stderr.on('data', function (chunk) {
+    childStderr.on('data', function (chunk) {
       const text = String(chunk);
       stderrTail = (stderrTail + text).slice(-600);
       stderrBuf += text;
@@ -1206,12 +1397,21 @@ function runCodex(target, key, prompt, onText, fresh) {
 /* ---------------- 内部通知接口（供定时任务使用） ---------------- */
 let lastEventInfo = null;
 
+/**
+ * @param {any} body 通知请求体
+ * @returns {NotifyTarget|null}
+ */
 function resolveNotifyTarget(body) {
   return IDENT.resolveNotifyTarget(body, LEGACY_TO_FEISHU, NOTIFY_USER);
 }
 
 function startInternalNotifyServer() {
   const server = http.createServer(function (req, res) {
+    /**
+     * @param {number} status
+     * @param {any} obj
+     * @returns {void}
+     */
     function reply(status, obj) {
       const body = JSON.stringify(obj);
       res.writeHead(status, {
@@ -1236,6 +1436,7 @@ function startInternalNotifyServer() {
       if (data.length > 256 * 1024) req.destroy();
     });
     req.on('end', function () {
+      /** @type {any} */
       let body = {};
       try { body = JSON.parse(data || '{}'); } catch (e) {}
       const text = String(body.text || '').trim();
@@ -1272,7 +1473,7 @@ function startLongConnection() {
     'im.message.receive_v1': function (data) {
       try {
         handleMessage(data);
-      } catch (e) {
+      } catch (/** @type {any} */ e) {
         writeLog('error', '消息处理异常', { error: e && e.message ? e.message : String(e) });
         healthLog('feishu-bot: 消息处理异常', { error: en(e) });
       }
@@ -1321,6 +1522,10 @@ function startLongConnection() {
   });
 }
 
+/**
+ * @param {any} e
+ * @returns {string}
+ */
 function en(e) {
   return (e && e.message) ? e.message : String(e);
 }
@@ -1403,7 +1608,7 @@ healthLog('feishu-bot: 进程启动', {
 
 if (SIMULATE_EVENT) {
   let simEvent = null;
-  try { simEvent = JSON.parse(SIMULATE_EVENT); } catch (e) {
+  try { simEvent = JSON.parse(SIMULATE_EVENT); } catch (/** @type {any} */ e) {
     console.error('FEISHU_SIMULATE_EVENT 不是合法 JSON：' + e.message);
   }
   if (simEvent) {
@@ -1417,6 +1622,11 @@ if (SIMULATE_EVENT) {
 
 /* ---------------- 退出与崩溃记录 ---------------- */
 let exiting = false;
+/**
+ * @param {string} reason
+ * @param {Record<string, any>} [extra]
+ * @returns {void}
+ */
 function recordExit(reason, extra) {
   if (exiting) return;
   exiting = true;
