@@ -18,7 +18,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const { URL } = require('url');
 const lark = require('@larksuiteoapi/node-sdk');
 const TAROT_IMAGE = require('./tarot-image.js');
@@ -60,6 +60,15 @@ const tokenEqual = UTIL.tokenEqual;
 const rollDiceText = CMDS.rollDiceText;
 const isOnceTasksCommand = CMDS.isOnceTasksCommand;
 const onceTasksText = CMDS.onceTasksText;
+const isStatusCommand = CMDS.isStatusCommand;
+const isUsageCommand = CMDS.isUsageCommand;
+const isTimersCommand = CMDS.isTimersCommand;
+const healthText = CMDS.healthText;
+const timerRows = CMDS.timerRows;
+const parseShowResults = CMDS.parseShowResults;
+const parseFailedUnits = CMDS.parseFailedUnits;
+const timersText = CMDS.timersText;
+const usageText = CMDS.usageText;
 
 // 生活指令（记账 / 待办 / 塔罗 / 运势）由可选的 life-app 提供。
 // 找不到就降级：机器人照常工作，只是少了这几条指令。
@@ -189,6 +198,9 @@ const HELP_HEAD =
   '· .codex 内容 / .c 内容 —— 调用 Codex 处理\n' +
   '· .rand 3d10 / 骰子 3d10 —— 投骰子（支持 2d6+1、d20）\n' +
   (SCHED_ONCE_ENABLED ? '· 任务 / .tasks —— 查看待执行的单次提醒\n' : '') +
+  '· 状态 / 巡检 —— 服务器巡检结果（服务 / 端口 / 站点 / 磁盘 / 证书）\n' +
+  '· 用量 / 余额 —— API 余额与 Token 用量\n' +
+  '· 定时器 —— 定时任务的下次运行与上次结果\n' +
   (LIFE_ENABLED ? '· .tarot / 塔罗牌 —— 抽一张塔罗并解读\n· .fortune / 今日运势 —— 每日运势（每天算一次，之后返回缓存）\n' : '') +
   '· 开头的 . 也可以写成 。（如 。help、。rand 3d10）';
 
@@ -247,6 +259,99 @@ const NEED_LIFE_APP =
 const NEED_SCHEDULER_APP =
   '这条指令依赖 scheduler-app（单次提醒），当前未安装。\n' +
   '把 scheduler-app 放到 /opt/scheduler-app 或 /root/scheduler-app，或用 SCHEDULER_APP_DIR 指定路径后重启即可。';
+
+/* -------- 服务器类指令（状态 / 用量 / 定时器）--------
+ * 这几种信息要么涉及服务器内部结构（单元名、端口、crontab），要么是私事，
+ * 都不适合放在公开的监控页上，所以在飞书里问。走本地脚本与本地接口，
+ * 不经过 Codex——比 `.c 今天服务器状态` 快，也不烧 token。
+ */
+const MONITOR_API = String(process.env.FEISHU_MONITOR_API || 'http://127.0.0.1:8791').replace(/\/+$/, '');
+const HEALTH_SCRIPT = String(process.env.FEISHU_HEALTH_SCRIPT || '/root/server-ops/bin/health-check.sh');
+
+/**
+ * 跑一条命令，stdout 与 stderr 合并返回，顺带给出退出码。
+ * @param {string} file
+ * @param {string[]} args
+ * @param {number} timeoutMs
+ * @returns {Promise<{ code: number, output: string }>}
+ */
+function runCommand(file, args, timeoutMs) {
+  return new Promise(function (resolve) {
+    execFile(file, args, { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 }, function (error, stdout, stderr) {
+      const output = String(stdout || '') + String(stderr || '');
+      let code = 0;
+      if (error) code = typeof error.code === 'number' ? error.code : 1;
+      resolve({ code: code, output: output });
+    });
+  });
+}
+
+/**
+ * 取本机接口的 JSON（监控后端只监听 127.0.0.1，不走公网）。
+ * @param {string} url
+ * @returns {Promise<any>}
+ */
+function getJson(url) {
+  return new Promise(function (resolve, reject) {
+    const mod = url.indexOf('https:') === 0 ? https : http;
+    const req = mod.get(url, function (res) {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', function (c) { body += c; });
+      res.on('end', function () {
+        try { resolve(JSON.parse(body)); } catch (/** @type {any} */ e) {
+          reject(new Error('HTTP ' + res.statusCode + ' 返回的不是 JSON'));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(15000, function () { req.destroy(new Error('请求超时')); });
+  });
+}
+
+/**
+ * @param {NotifyTarget} replyTarget
+ * @param {string[]} ids
+ * @returns {Promise<void>}
+ */
+async function statusCommand(replyTarget, ids) {
+  const result = await runCommand(HEALTH_SCRIPT, [], 60000);
+  writeLog('info', '查询服务器状态', { openId: ids[0], exitCode: result.code });
+  deliver(replyTarget, healthText(result.output, result.code, Date.now()));
+}
+
+/**
+ * @param {NotifyTarget} replyTarget
+ * @param {string[]} ids
+ * @returns {Promise<void>}
+ */
+async function usageCommand(replyTarget, ids) {
+  const payload = await getJson(MONITOR_API + '/api/balance');
+  writeLog('info', '查询用量与余额', { openId: ids[0] });
+  const text = usageText(payload.balance || null, payload.chat || null, Date.now());
+  deliver(replyTarget, payload.error ? text + '\n⚠️ 余额接口：' + payload.error : text);
+}
+
+/**
+ * @param {NotifyTarget} replyTarget
+ * @param {string[]} ids
+ * @returns {Promise<void>}
+ */
+async function timersCommand(replyTarget, ids) {
+  const list = await runCommand('systemctl', ['list-timers', '--all', '--no-legend', '--plain'], 10000);
+  const rows = timerRows(list.output);
+  const active = rows.filter(function (row) { return !!row.nextText; }).map(function (row) { return row.activated; });
+  /** @type {Record<string, string>} */
+  let results = {};
+  if (active.length) {
+    // 一次 show 全问出来，别为每个单元起一个进程
+    const show = await runCommand('systemctl', ['show'].concat(active, ['-p', 'Id', '-p', 'Result']), 10000);
+    results = parseShowResults(show.output);
+  }
+  const failed = await runCommand('systemctl', ['--failed', '--no-legend', '--plain'], 10000);
+  writeLog('info', '查询定时器', { openId: ids[0], count: rows.length });
+  deliver(replyTarget, timersText(rows, results, parseFailedUnits(failed.output), Date.now()));
+}
 
 /* ---------------- 文件与目录 ---------------- */
 /**
@@ -975,6 +1080,23 @@ function handleMessage(data) {
     }
     writeLog('info', '查询单次提醒', { openId: ids[0], group: isGroup, count: tasks.length });
     deliver(replyTarget, onceTasksText(tasks, Date.now()));
+    return;
+  }
+
+  // 服务器类指令：状态 / 用量 / 定时器。走本地脚本与本地接口，不经过模型，
+  // 也不给受限账号——服务器内部信息只给白名单账号看
+  if (isStatusCommand(text) || isUsageCommand(text) || isTimersCommand(text)) {
+    if (restricted) {
+      deliver(replyTarget, '⚠️ 受限账号不能查看服务器信息。');
+      return;
+    }
+    const onFail = function (/** @type {any} */ e) {
+      writeLog('warn', '服务器指令执行失败', { openId: ids[0], error: errText(e) });
+      deliver(replyTarget, '查询失败：' + errText(e));
+    };
+    if (isStatusCommand(text)) { statusCommand(replyTarget, ids).catch(onFail); return; }
+    if (isUsageCommand(text)) { usageCommand(replyTarget, ids).catch(onFail); return; }
+    timersCommand(replyTarget, ids).catch(onFail);
     return;
   }
 

@@ -122,8 +122,247 @@ function onceTasksText(tasks, now) {
   return lines.join('\n');
 }
 
+/* ---------------------------------------------------------------
+ * 服务器类指令：状态 / 用量 / 定时器
+ *
+ * 这些信息要么涉及服务器内部结构，要么是私事，都不适合放在公开的
+ * 监控页上，所以放在飞书里查——只有白名单账号能用，受限账号不给。
+ * 纯解析与拼文本在这里，跑 systemctl / 调接口留在 server.js。
+ * --------------------------------------------------------------- */
+
+// 只认整句，免得把「状态怎么样」这类正文吞掉
+const STATUS_RE = /^(?:\.status|状态|服务器状态|巡检|服务器巡检|健康检查)$/i;
+const USAGE_RE = /^(?:\.usage|用量|余额|花费|花费统计|token|token用量)$/i;
+const TIMERS_RE = /^(?:\.timers?|定时器|计时器|定时任务|计划任务)$/i;
+
+/**
+ * @param {unknown} text
+ * @returns {boolean}
+ */
+function isStatusCommand(text) {
+  return STATUS_RE.test(String(text || '').trim());
+}
+
+/**
+ * @param {unknown} text
+ * @returns {boolean}
+ */
+function isUsageCommand(text) {
+  return USAGE_RE.test(String(text || '').trim());
+}
+
+/**
+ * @param {unknown} text
+ * @returns {boolean}
+ */
+function isTimersCommand(text) {
+  return TIMERS_RE.test(String(text || '').trim());
+}
+
+/**
+ * @param {number} now
+ * @returns {string}
+ */
+function stamp(now) {
+  const d = new Date(now);
+  return pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+}
+
+/**
+ * 大数字用「万 / 亿」更好读：12345678 → 1234.6 万
+ * @param {unknown} value
+ * @returns {string}
+ */
+function fmtTokens(value) {
+  const n = Number(value) || 0;
+  if (Math.abs(n) >= 100000000) return (n / 100000000).toFixed(2) + ' 亿';
+  if (Math.abs(n) >= 10000) return (n / 10000).toFixed(1) + ' 万';
+  return String(Math.round(n));
+}
+
+/**
+ * 巡检脚本的输出直接给用户看：脚本本身就按人读的格式打印，
+ * 这里只加一个结论头，不重新解析（解析反而容易漏信息）。
+ * @param {string} output
+ * @param {number} exitCode
+ * @param {number} now
+ * @returns {string}
+ */
+function healthText(output, exitCode, now) {
+  const head = exitCode === 0 ? '✅ 服务器巡检正常' : '⚠️ 服务器巡检有异常';
+  const body = String(output || '').trim();
+  if (!body) return head + '（' + stamp(now) + '）\n没有拿到巡检输出，看看 server-ops-healthcheck 的日志。';
+  return head + '（' + stamp(now) + '）\n' + body;
+}
+
+/**
+ * 解析 `systemctl list-timers --all --no-legend --plain`。
+ *
+ * 列是按宽度对齐的，但 LEFT 列会撑满（`1h 8min left` 后面只剩一个空格），
+ * 按空白切列会错位；时间也只取 `YYYY-MM-DD HH:MM:SS`，不碰星期与时区——
+ * 本机 locale 异常时星期会变成数字，时区里的 CST 又会被 V8 当成美国中部时间。
+ *
+ * @param {string} text
+ * @returns {Array<{unit: string, activated: string, nextText: string, lastText: string}>}
+ */
+function timerRows(text) {
+  /** @type {Array<{unit: string, activated: string, nextText: string, lastText: string}>} */
+  const rows = [];
+  String(text || '').split('\n').forEach(function (line) {
+    const trimmed = line.replace(/\s+$/, '');
+    if (!trimmed.trim()) return;
+    const tail = /(\S+\.timer)\s+(\S+)\s*$/.exec(trimmed);
+    if (!tail) return;
+    const dates = trimmed.match(/\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}/g) || [];
+    const inactive = /^n\/a\b/.test(trimmed);
+    rows.push({
+      unit: tail[1],
+      activated: tail[2],
+      nextText: inactive ? '' : (dates[0] || ''),
+      lastText: inactive ? (dates[0] || '') : (dates[1] || ''),
+    });
+  });
+  return rows;
+}
+
+/**
+ * `systemctl show a.service b.service -p Id -p Result` 的分块输出 → { 单元名: 结果 }
+ * @param {string} text
+ * @returns {Record<string, string>}
+ */
+function parseShowResults(text) {
+  /** @type {Record<string, string>} */
+  const out = {};
+  String(text || '').split(/\n\s*\n/).forEach(function (block) {
+    let id = '';
+    let result = '';
+    block.split('\n').forEach(function (line) {
+      const m = /^(Id|Result)=(.*)$/.exec(line.trim());
+      if (!m) return;
+      if (m[1] === 'Id') id = m[2].trim();
+      else result = m[2].trim();
+    });
+    if (id) out[id] = result || 'unknown';
+  });
+  return out;
+}
+
+/**
+ * `systemctl --failed --no-legend --plain` → 失败单元名
+ * @param {string} text
+ * @returns {string[]}
+ */
+function parseFailedUnits(text) {
+  return String(text || '')
+    .split('\n')
+    .map(function (line) { return line.trim().split(/\s+/)[0]; })
+    .filter(function (name) { return /\.(service|timer|socket|mount|target)$/.test(name || ''); });
+}
+
+/**
+ * `2026-09-18 04:20:00` → `09-18 04:20`
+ * @param {unknown} text
+ * @returns {string}
+ */
+function shortWhen(text) {
+  const m = /\d{4}-(\d{2}-\d{2})\s+(\d{2}:\d{2})/.exec(String(text || ''));
+  return m ? m[1] + ' ' + m[2] : '--';
+}
+
+/** @type {Record<string, string>} */
+const RESULT_LABEL = {
+  success: '成功',
+  exited: '已退出',
+  'signal': '被信号终止',
+  'core-dump': '崩溃',
+  timeout: '超时',
+  failed: '失败',
+};
+
+/**
+ * 定时器清单文本：只列还在运行的（停用的单独给个数字），
+ * 顺带带上上次运行结果——AGENTS 里的验证要求就是「timer active + 上次 success」。
+ * @param {Array<{unit: string, activated: string, nextText: string, lastText: string}>} rows
+ * @param {Record<string, string>} results 激活单元 → Result
+ * @param {string[]} failedUnits `systemctl --failed` 的单元名
+ * @param {number} now
+ * @returns {string}
+ */
+function timersText(rows, results, failedUnits, now) {
+  const list = Array.isArray(rows) ? rows : [];
+  const active = list.filter(function (r) { return !!r.nextText; });
+  const failed = Array.isArray(failedUnits) ? failedUnits : [];
+  const lines = ['⏱ 定时器（' + active.length + ' / ' + list.length + ' 运行中 · 失败单元 ' + failed.length + ' 个）'];
+  if (!active.length) {
+    lines.push('（没有正在运行的定时器）');
+  }
+  active.forEach(function (row) {
+    const result = (results || {})[row.activated];
+    const label = result ? (RESULT_LABEL[result] || result) : '未知';
+    const bad = result && result !== 'success' ? ' ⚠️' : '';
+    lines.push('· ' + row.unit.replace(/\.timer$/, '') +
+      ' · 下次 ' + shortWhen(row.nextText) +
+      ' · 上次 ' + shortWhen(row.lastText) + ' ' + label + bad);
+  });
+  if (list.length > active.length) {
+    lines.push('（另有 ' + (list.length - active.length) + ' 个已停用的定时器，不在上面）');
+  }
+  if (failed.length) lines.push('⚠️ 失败单元：' + failed.join('、'));
+  return lines.join('\n') + '\n（' + stamp(now) + '）';
+}
+
+/**
+ * 余额 + 用量文本。页面已经不再展示 Token 用量，要看就在这里看。
+ * @param {{isAvailable?: boolean, balances?: Array<{currency?: string, total?: string, granted?: string, toppedUp?: string}>}|null} balance
+ * @param {{totals?: {input?: number, output?: number}, last14?: Array<{date?: string, input?: number, output?: number}>, conversations?: number, messages?: number, totalTokens?: number}|null} chat
+ * @param {number} now
+ * @returns {string}
+ */
+function usageText(balance, chat, now) {
+  const lines = ['💰 用量与余额（' + stamp(now) + '）'];
+  const rows = (balance && balance.balances) || [];
+  if (rows.length) {
+    rows.forEach(function (b) {
+      const total = Number(b.total);
+      lines.push('· 余额 ' + (isFinite(total) ? '¥' + total.toFixed(2) : '--') +
+        '（充值 ' + (b.toppedUp == null ? '--' : b.toppedUp) +
+        ' / 赠送 ' + (b.granted == null ? '--' : b.granted) + '）');
+    });
+  } else {
+    lines.push('· 余额：拿不到' + (balance && balance.isAvailable === false ? '（接口说不可用）' : ''));
+  }
+  const last14 = (chat && chat.last14) || [];
+  const latest = last14.length ? last14[last14.length - 1] : null;
+  if (latest) {
+    lines.push('· 最近记录 ' + (latest.date || '--') + '：输入 ' + fmtTokens(latest.input) +
+      ' / 输出 ' + fmtTokens(latest.output) + ' tok');
+  }
+  const totals = (chat && chat.totals) || null;
+  if (last14.length && totals) {
+    const sum = last14.reduce(function (acc, d) { return acc + (Number(d.input) || 0) + (Number(d.output) || 0); }, 0);
+    lines.push('· 近 14 天：' + fmtTokens(sum) + ' tok（输入 ' + fmtTokens(totals.input) +
+      ' / 输出 ' + fmtTokens(totals.output) + '）');
+  }
+  if (totals) {
+    lines.push('· 累计：对话 ' + ((chat && chat.conversations) || 0) + ' 个 · 消息 ' + ((chat && chat.messages) || 0) +
+      ' 条 · ' + fmtTokens(chat && chat.totalTokens) + ' tok');
+  }
+  return lines.join('\n');
+}
+
 module.exports = {
   rollDiceText: rollDiceText,
   isOnceTasksCommand: isOnceTasksCommand,
   onceTasksText: onceTasksText,
+  isStatusCommand: isStatusCommand,
+  isUsageCommand: isUsageCommand,
+  isTimersCommand: isTimersCommand,
+  healthText: healthText,
+  timerRows: timerRows,
+  parseShowResults: parseShowResults,
+  parseFailedUnits: parseFailedUnits,
+  shortWhen: shortWhen,
+  fmtTokens: fmtTokens,
+  timersText: timersText,
+  usageText: usageText,
 };

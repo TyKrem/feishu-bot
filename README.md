@@ -14,7 +14,8 @@
 - **白名单**：私聊按 `open_id` 放行；白名单为空时只回报身份，不执行任何操作
 - **群聊**：需 @ 机器人 才响应，可再按 `chat_id` 加白名单
 - **内置指令**：骰子、塔罗、每日运势、记账、待办（后四项依赖可选的 life-app）、
-  任务（查看待执行的单次提醒，依赖可选的 scheduler-app）
+  任务（查看待执行的单次提醒，依赖可选的 scheduler-app）、状态 / 用量 / 定时器
+  （服务器信息，走本地脚本与监控接口，不经过 Codex，也不给受限账号）
 - **塔罗带牌面**：抽塔罗时自动附上对应牌面的图片，逆位会把图片倒过来
 - **图片只登记不识别**：直接发图先落盘并按顺序编号，你明确说要看时才让 Codex 读
 - **随机回复延迟**：避免"秒回"得像脚本
@@ -126,6 +127,9 @@ journalctl -u feishu-bot -f
 | `.fortune` / `今日运势` | 每日运势，按天缓存 *（需 life-app）* |
 | 记账 / 待办类中文 | 直接处理，不启动 Codex *（需 life-app）* |
 | `任务` / `.tasks` | 列出待执行的单次提醒（到点、剩余时间、内容）*（需 scheduler-app）* |
+| `状态` / `巡检` | 跑 server-ops 的巡检脚本，回服务 / 端口 / 站点 / 磁盘 / 证书 / 失败单元 |
+| `用量` / `余额` | API 余额与 Token 用量（监控页已不展示，改在这里查） |
+| `定时器` / `计时器` | 定时任务的下次运行、上次时间与上次结果（success / failed） |
 | 直接发图片 | 先存盘登记（不识别），要看时说 `.c 看下第 2 张图` |
 
 常用指令**不写前缀**也能用（`帮助`、`塔罗牌`、`今日运势`、`骰子 3d10`）；
@@ -150,6 +154,8 @@ journalctl -u feishu-bot -f
 | `FEISHU_IMAGE_MAX_PER_KEY` | 每个会话最多保留多少张图片的索引，默认 `200` |
 | `LIFE_APP_DIR` | life-app 所在目录（默认依次找 `/opt/life-app`、`/root/life-app`） |
 | `SCHEDULER_APP_DIR` / `FEISHU_ONCE_DIR` | scheduler-app 目录与一次性提醒数据目录（默认 `/opt/scheduler-app`、`/opt/scheduler-app/data/once`） |
+| `FEISHU_MONITOR_API` | 监控后端地址，`用量 / 余额` 用（默认 `http://127.0.0.1:8791`） |
+| `FEISHU_HEALTH_SCRIPT` | 巡检脚本路径，`状态 / 巡检` 用（默认 `/root/server-ops/bin/health-check.sh`） |
 | `FEISHU_CODEX_BIN` | Codex 可执行文件路径 |
 | `FEISHU_WORKSPACE` | Codex 工作目录，默认 `/root` |
 | `FEISHU_CODEX_HOME` | Codex 运行目录（会话与配置隔离） |
