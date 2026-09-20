@@ -63,6 +63,7 @@ const onceTasksText = CMDS.onceTasksText;
 const isStatusCommand = CMDS.isStatusCommand;
 const isUsageCommand = CMDS.isUsageCommand;
 const isTimersCommand = CMDS.isTimersCommand;
+const kbQuery = CMDS.kbQuery;
 const healthText = CMDS.healthText;
 const timerRows = CMDS.timerRows;
 const parseShowResults = CMDS.parseShowResults;
@@ -201,6 +202,7 @@ const HELP_HEAD =
   '· 状态 / 巡检 —— 服务器巡检结果（服务 / 端口 / 站点 / 磁盘 / 证书）\n' +
   '· 用量 / 余额 —— API 余额与 Token 用量\n' +
   '· 定时器 —— 定时任务的下次运行与上次结果\n' +
+  '· 知识库 关键词 —— 查服务器知识库（项目/服务/端口/坑），例如「知识库 飞书」\n' +
   (LIFE_ENABLED ? '· .tarot / 塔罗牌 —— 抽一张塔罗并解读\n· .fortune / 今日运势 —— 每日运势（每天算一次，之后返回缓存）\n' : '') +
   '· 开头的 . 也可以写成 。（如 。help、。rand 3d10）';
 
@@ -307,6 +309,22 @@ function getJson(url) {
     req.on('error', reject);
     req.setTimeout(15000, function () { req.destroy(new Error('请求超时')); });
   });
+}
+
+/**
+ * 查服务器知识库：把关键词交给 server-ops/bin/kb-search.sh。
+ * 知识库里有端口/单元名这类内部信息，同样只给白名单账号。
+ * @param {NotifyTarget} replyTarget
+ * @param {string[]} ids
+ * @param {string} keyword
+ * @returns {Promise<void>}
+ */
+async function kbSearchCommand(replyTarget, ids, keyword) {
+  const args = ['/root/server-ops/bin/kb-search.sh'].concat(keyword.split(/\s+/).filter(Boolean));
+  const result = await runCommand('bash', args, 20000);
+  writeLog('info', '查询知识库', { openId: ids[0], keyword: keyword.slice(0, 60) });
+  const out = String(result.output || '').trim();
+  deliver(replyTarget, out ? '📚 ' + keyword + '\n' + out : '知识库里没找到「' + keyword + '」，换个词试试。');
 }
 
 /**
@@ -1097,6 +1115,24 @@ function handleMessage(data) {
     if (isStatusCommand(text)) { statusCommand(replyTarget, ids).catch(onFail); return; }
     if (isUsageCommand(text)) { usageCommand(replyTarget, ids).catch(onFail); return; }
     timersCommand(replyTarget, ids).catch(onFail);
+    return;
+  }
+
+  // 知识库：手机上也能查（→ server-ops/bin/kb-search.sh）
+  const kbKeyword = kbQuery(text);
+  if (kbKeyword !== null) {
+    if (restricted) {
+      deliver(replyTarget, '⚠️ 受限账号不能查看服务器信息。');
+      return;
+    }
+    if (!kbKeyword) {
+      deliver(replyTarget, '用法：知识库 <关键词>，例如「知识库 飞书」「知识库 定时器 失败」；多个词要同时命中。');
+      return;
+    }
+    kbSearchCommand(replyTarget, ids, kbKeyword).catch(function (/** @type {any} */ e) {
+      writeLog('warn', '知识库查询失败', { openId: ids[0], error: errText(e) });
+      deliver(replyTarget, '知识库查询失败：' + errText(e));
+    });
     return;
   }
 

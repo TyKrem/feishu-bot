@@ -159,6 +159,17 @@ function isTimersCommand(text) {
   return TIMERS_RE.test(String(text || '').trim());
 }
 
+// 知识库查询：`知识库 飞书` / `.kb 定时器 失败`。
+// 返回关键词串（可能为空，表示只发了指令名），不是知识库指令时返回 null。
+/**
+ * @param {unknown} text
+ * @returns {string|null}
+ */
+function kbQuery(text) {
+  const m = /^(?:\.kb|知识库|查知识库|知识库查询)\s*[:：]?\s*(.*)$/i.exec(String(text || '').trim());
+  return m ? m[1].trim() : null;
+}
+
 /**
  * @param {number} now
  * @returns {string}
@@ -357,6 +368,7 @@ module.exports = {
   isStatusCommand: isStatusCommand,
   isUsageCommand: isUsageCommand,
   isTimersCommand: isTimersCommand,
+  kbQuery: kbQuery,
   healthText: healthText,
   timerRows: timerRows,
   parseShowResults: parseShowResults,

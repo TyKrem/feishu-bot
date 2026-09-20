@@ -18,6 +18,9 @@ if [ -z "$NPM_BIN" ]; then echo "找不到 npm，无法安装依赖" >&2; exit 1
 echo "==> 同步源码到 $DEST_DIR"
 mkdir -p "$DEST_DIR/server" "$DEST_DIR/data"
 cp -a "$SRC_DIR/server/." "$DEST_DIR/server/"
+# bin/ 里是 setup-account.sh 这类运维工具，原先漏了同步，导致 /opt 里留着旧副本
+mkdir -p "$DEST_DIR/bin"
+cp -a "$SRC_DIR/bin/." "$DEST_DIR/bin/"
 cp -a "$SRC_DIR/package.json" "$DEST_DIR/package.json"
 chmod 700 "$DEST_DIR/data"
 
