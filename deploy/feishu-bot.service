@@ -9,6 +9,11 @@ User=root
 Group=root
 EnvironmentFile=/etc/feishu-bot.env
 WorkingDirectory=/opt/feishu-bot
+# Codex CLI 的启动脚本是 #!/usr/bin/env node，而 systemd 的默认 PATH
+# （/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin）里没有 node——
+# 用户发消息时会看到「Codex 未正常完成（code=127）：/usr/bin/env: 'node':
+# No such file or directory」（2026-09-24 实测）。这里把 Node 的 bin 加进来。
+Environment="PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ExecStart=/opt/node/bin/node /opt/feishu-bot/server/server.js
 Restart=always
 RestartSec=5
