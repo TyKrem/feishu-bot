@@ -10,8 +10,8 @@ UNIT_FILE=/etc/systemd/system/feishu-bot.service
 NODE_BIN=/opt/node/bin/node
 if [ ! -x "$NODE_BIN" ]; then NODE_BIN="$(command -v node)"; fi
 NPM_BIN="$(command -v npm || true)"
-if [ -z "$NPM_BIN" ] && [ -x /root/.nvm/versions/node/v16.20.2/bin/npm ]; then
-  NPM_BIN=/root/.nvm/versions/node/v16.20.2/bin/npm
+if [ -z "$NPM_BIN" ] && [ -x /opt/node/bin/npm ]; then
+  NPM_BIN=/opt/node/bin/npm
 fi
 if [ -z "$NPM_BIN" ]; then echo "找不到 npm，无法安装依赖" >&2; exit 1; fi
 
