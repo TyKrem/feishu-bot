@@ -887,6 +887,31 @@ function deliverImage(target, filePath) {
  * @param {string} text
  * @returns {void}
  */
+// ---------------------------- 延迟重启 ----------------------------
+// 为什么需要：life-app 是 feishu-bot 依赖的库，`deploy-app.sh life-app` 结尾要重启 bot
+// 才能生效；但如果这条命令**正是 bot 自己（通过 Codex）跑的**，直接重启等于把自己杀掉，
+// 用户就只看到"命令没输出"（2026-09-25 就是这么被发现的）。
+// 约定：deploy 脚本在飞书会话里跑时不重启，只写下面这个标记；bot 等当前这轮答完
+// （回复发出之后）或没有回合在跑时，再自己重启一次。
+const RESTART_FLAG = '/run/feishu-bot.restart-requested';
+let activeTurns = 0;
+
+function restartRequested() {
+  try { return fs.existsSync(RESTART_FLAG); } catch (e) { return false; }
+}
+
+function applyPendingRestart() {
+  if (activeTurns > 0 || !restartRequested()) return;
+  try { fs.unlinkSync(RESTART_FLAG); } catch (e) {}
+  writeLog('info', '按排队的请求重启自身', { reason: '部署脚本在飞书会话里跑时写入的标记' });
+  // 稍等一下再重启：此刻这条回复刚进发送队列，给它一点时间真正发出去
+  setTimeout(function () {
+    execFile('systemctl', ['restart', 'feishu-bot'], function (err) {
+      if (err) console.error('自行重启失败：' + errText(err));
+    });
+  }, 800);
+}
+
 function deliver(target, text) {
   const chunks = chunkText(text, 3000).filter(function (c) { return c.length; });
   if (!chunks.length) return;
@@ -921,6 +946,9 @@ function deliver(target, text) {
       // 长消息分片之间留一点间隔，避免触发飞书发送频率限制
       if (i + 1 < chunks.length) await sleep(300);
     }
+    // 回复发完之后再看有没有"排队的重启"：放在这里保证消息先出去再重启自己，
+    // 否则在飞书会话里跑 deploy 时输出会回不来（见 applyPendingRestart 注释）
+    applyPendingRestart();
   });
 }
 
@@ -1446,6 +1474,8 @@ function runCodex(target, key, prompt, onText, fresh) {
     let finished = false;
     let currentThread = threadId;
     const timer = setTimeout(function () { killChild('处理超时'); }, TURN_TIMEOUT * 1000);
+    // 有回合在跑时不重启自己，等这轮结束（applyPendingRestart 会看这个计数）
+    activeTurns++;
 
     /** @param {string} [reason] */
     function killChild(reason) {
@@ -1464,6 +1494,7 @@ function runCodex(target, key, prompt, onText, fresh) {
     function finish() {
       if (finished) return;
       finished = true;
+      activeTurns = Math.max(0, activeTurns - 1);
       clearTimeout(timer);
       if (done && agentParts.length) {
         const text = agentParts.join('\n\n').trim();
@@ -1766,6 +1797,9 @@ loadImageIndex();
 // 超期图片清理：启动时清一次，之后每 6 小时一次
 cleanupImages();
 setInterval(cleanupImages, IMAGE_CLEAN_INTERVAL_MS).unref();
+// 兜底：万一某轮的回复没发出去（回合被终止等），排队的重启也不会一直卡着——
+// 没有回合在跑时每 20 秒看一次标记，有就重启自己。
+setInterval(applyPendingRestart, 20000).unref();
 startInternalNotifyServer();
 
 if (!SIMULATE_EVENT && (!APP_ID || !APP_SECRET)) {
