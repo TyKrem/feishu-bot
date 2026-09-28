@@ -22,7 +22,6 @@ const { spawn, execFile } = require('child_process');
 const { URL } = require('url');
 const lark = require('@larksuiteoapi/node-sdk');
 const TAROT_IMAGE = require('./tarot-image.js');
-const LOCATION_SERVER = require('./location-server.js');
 const CFG = require('./lib/config.js');
 const TXT = require('./lib/text.js');
 const IDENT = require('./lib/identity.js');
@@ -144,9 +143,6 @@ const NOTIFY_USER = String(ENV.FEISHU_NOTIFY_USER || '').trim();
 const NOTIFY_TOKEN = String(ENV.FEISHU_NOTIFY_TOKEN || '').trim();
 const INTERNAL_HOST = String(ENV.FEISHU_INTERNAL_HOST || '127.0.0.1');
 const INTERNAL_PORT = parseInt(ENV.FEISHU_INTERNAL_PORT || '8796', 10);
-const LOCATION_HOST = String(ENV.FEISHU_LOCATION_HOST || '').trim();
-const LOCATION_PORT = parseInt(ENV.FEISHU_LOCATION_PORT || '0', 10);
-const LOCATION_TOKEN = String(ENV.FEISHU_LOCATION_TOKEN || '').trim();
 const BOT_OPEN_ID = String(ENV.FEISHU_BOT_OPEN_ID || '').trim();
 const BOT_NAME = String(ENV.FEISHU_BOT_NAME || '').trim();
 // 塔罗牌面图片：默认开启，取不到图片时自动降级为纯文字
@@ -1713,24 +1709,6 @@ function startInternalNotifyServer() {
   });
 }
 
-function startLocationUploadServer() {
-  if (!LOCATION_HOST || !LOCATION_PORT || !LOCATION_TOKEN || !LIFE_LOCATION) return;
-  const server = LOCATION_SERVER.createLocationServer({
-    token: LOCATION_TOKEN,
-    saveLocation: LIFE_LOCATION.saveLocation,
-  });
-  server.listen(LOCATION_PORT, LOCATION_HOST, function () {
-    console.log('定位上传接口已在私有网络监听');
-  });
-  server.on('error', function (error) {
-    writeLog('error', '定位上传接口启动失败', { error: error.message });
-    // 重启时 Tailscale 地址可能晚于机器人出现，稍后再绑定私网地址。
-    if (/** @type {NodeJS.ErrnoException} */ (error).code === 'EADDRNOTAVAIL') {
-      setTimeout(startLocationUploadServer, 15000).unref();
-    }
-  });
-}
-
 /* ---------------- 长连接 ---------------- */
 let wsClient = null;
 let readyNotified = false;
@@ -1846,7 +1824,6 @@ setInterval(cleanupImages, IMAGE_CLEAN_INTERVAL_MS).unref();
 // 没有回合在跑时每 20 秒看一次标记，有就重启自己。
 setInterval(applyPendingRestart, 20000).unref();
 startInternalNotifyServer();
-startLocationUploadServer();
 
 if (!SIMULATE_EVENT && (!APP_ID || !APP_SECRET)) {
   const msg = '未配置 FEISHU_APP_ID / FEISHU_APP_SECRET，服务不会启动。'
