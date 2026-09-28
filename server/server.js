@@ -1066,7 +1066,7 @@ function handleMessage(data) {
     try {
       const locationContent = JSON.parse(String(message.content || '{}'));
       LIFE_LOCATION.saveLocation(locationContent);
-      deliver(replyTarget, '✅ 已更新早报位置，接下来两小时内的早报会使用这个位置；之后自动回退到北京朝阳。');
+      deliver(replyTarget, '✅ 已更新早报位置。之后早报会一直使用这个位置，直到你再次分享；首次设置前默认北京朝阳。');
     } catch (/** @type {any} */ error) {
       deliver(replyTarget, '❌ 位置消息无效，未更新早报位置。');
       writeLog('warn', '飞书位置消息处理失败', { error: error && error.message ? error.message : String(error) });
