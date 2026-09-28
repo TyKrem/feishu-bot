@@ -1057,6 +1057,27 @@ function handleMessage(data) {
   const key = isGroup ? 'g:' + chatId + ':' + ids[0] : 'p:' + ids[0];
   const imageKeys = extractImageKeys(message);
 
+  // 用户从飞书客户端主动分享位置时更新早报地点；仅接受白名单用户的单聊位置，避免群聊成员覆盖个人位置。
+  if (messageType === 'location') {
+    if (isGroup) {
+      deliver(replyTarget, '请在和机器人的单聊中发送位置，群聊位置不会用于你的早报。');
+      return;
+    }
+    if (!LIFE_LOCATION) {
+      deliver(replyTarget, '早报定位功能暂不可用。');
+      return;
+    }
+    try {
+      const locationContent = JSON.parse(String(message.content || '{}'));
+      LIFE_LOCATION.saveLocation(locationContent);
+      deliver(replyTarget, '✅ 已更新早报位置，接下来两小时内的早报会使用这个位置；之后自动回退到北京朝阳。');
+    } catch (/** @type {any} */ error) {
+      deliver(replyTarget, '❌ 位置消息无效，未更新早报位置。');
+      writeLog('warn', '飞书位置消息处理失败', { error: error && error.message ? error.message : String(error) });
+    }
+    return;
+  }
+
   // 图片：先落盘登记，不识别；用户明确要求时才交给 Codex 读
   if (imageKeys.length) {
     if (restricted) {
