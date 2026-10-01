@@ -28,6 +28,7 @@ const IDENT = require('./lib/identity.js');
 const IMGS = require('./lib/images.js');
 const CMDS = require('./lib/commands.js');
 const UTIL = require('./lib/util.js');
+const OPTIONAL = require('./lib/optional-dependency.js');
 
 // 类型别名：跨模块的形状从 lib/ 引，本文件自己的状态在这里定义
 /** @typedef {import('./lib/identity.js').NotifyTarget} NotifyTarget */
@@ -78,17 +79,8 @@ const usageText = CMDS.usageText;
  * @returns {any} 模块导出；没装 life-app 时返回 null
  */
 function requireLife(mod) {
-  const lifeDir = String(process.env.LIFE_APP_DIR || '').replace(/\/+$/, '');
-  const dirs = [
-    lifeDir ? lifeDir + '/lib/' : '',
-    '/opt/life-app/lib/',
-    '/root/life-app/lib/',
-    path.join(__dirname, '..', 'vendor', 'life-app', 'lib/'),
-  ].filter(Boolean);
-  for (let i = 0; i < dirs.length; i++) {
-    try { return require(dirs[i] + mod); } catch (e) {}
-  }
-  return null;
+  const lifeDir = process.env.LIFE_APP_DIR || '/opt/life-app';
+  return OPTIONAL.loadOptionalLibrary(lifeDir, mod);
 }
 const LIFE_ACTIONS = requireLife('actions.js');
 const LIFE_FORTUNE = requireLife('fortune.js');
@@ -103,16 +95,8 @@ const LIFE_ENABLED = !!(LIFE_ACTIONS && LIFE_FORTUNE && LIFE_PROFILE);
  * @returns {any} 模块导出；没装 scheduler-app 时返回 null
  */
 function requireScheduler(mod) {
-  const schedDir = String(process.env.SCHEDULER_APP_DIR || '').replace(/\/+$/, '');
-  const dirs = [
-    schedDir ? schedDir + '/lib/' : '',
-    '/opt/scheduler-app/lib/',
-    '/root/scheduler-app/lib/',
-  ].filter(Boolean);
-  for (let i = 0; i < dirs.length; i++) {
-    try { return require(dirs[i] + mod); } catch (e) {}
-  }
-  return null;
+  const schedulerDir = process.env.SCHEDULER_APP_DIR || '/opt/scheduler-app';
+  return OPTIONAL.loadOptionalLibrary(schedulerDir, mod);
 }
 const SCHED_ONCE = requireScheduler('once.js');
 const SCHED_ONCE_ENABLED = !!SCHED_ONCE;
@@ -257,11 +241,11 @@ function botHelp(restricted) {
 
 const NEED_LIFE_APP =
   '这条指令依赖 life-app（记账 / 待办 / 塔罗 / 运势），当前未安装。\n' +
-  '把 life-app 放到 /opt/life-app 或 /root/life-app，或用 LIFE_APP_DIR 指定路径后重启即可。';
+  '把 life-app 部署到 /opt/life-app，或用 LIFE_APP_DIR 指定路径后重启即可。';
 
 const NEED_SCHEDULER_APP =
   '这条指令依赖 scheduler-app（单次提醒），当前未安装。\n' +
-  '把 scheduler-app 放到 /opt/scheduler-app 或 /root/scheduler-app，或用 SCHEDULER_APP_DIR 指定路径后重启即可。';
+  '把 scheduler-app 部署到 /opt/scheduler-app，或用 SCHEDULER_APP_DIR 指定路径后重启即可。';
 
 /* -------- 服务器类指令（状态 / 用量 / 定时器）--------
  * 这几种信息要么涉及服务器内部结构（单元名、端口、crontab），要么是私事，

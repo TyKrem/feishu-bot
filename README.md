@@ -154,7 +154,7 @@ journalctl -u feishu-bot -f
 | `FEISHU_TAROT_IMAGE` | 塔罗是否附牌面图片，`1` 开（默认）/ `0` 关 |
 | `FEISHU_IMAGE_RETENTION_DAYS` | 收到的图片保留天数，默认 `7`，超期在清理时删除 |
 | `FEISHU_IMAGE_MAX_PER_KEY` | 每个会话最多保留多少张图片的索引，默认 `200` |
-| `LIFE_APP_DIR` | life-app 所在目录（默认依次找 `/opt/life-app`、`/root/life-app`） |
+| `LIFE_APP_DIR` | life-app 所在目录（默认 `/opt/life-app`） |
 | `SCHEDULER_APP_DIR` / `FEISHU_ONCE_DIR` | scheduler-app 目录与一次性提醒数据目录（默认 `/opt/scheduler-app`、`/opt/scheduler-app/data/once`） |
 | `FEISHU_MONITOR_API` | 监控后端地址，`用量 / 余额` 用（默认 `http://127.0.0.1:8791`） |
 | `FEISHU_HEALTH_SCRIPT` | 巡检脚本路径，`状态 / 巡检` 用（默认 `/root/server-ops/bin/health-check.sh`） |
@@ -200,8 +200,8 @@ FEISHU_DRY_RUN=1 node server/server.js
 记账、待办、塔罗、运势由同作者的 life-app 提供。没有它机器人照常工作，
 只是这几条指令会回复"未安装"。
 
-安装方式：把 life-app 放到 `/opt/life-app` 或 `/root/life-app`，
-或用 `LIFE_APP_DIR` 指定路径后重启。
+安装方式：把 life-app 部署到 `/opt/life-app`，
+或用 `LIFE_APP_DIR` 显式指定路径后重启。目标模块缺失时相关指令降级；模块内部加载报错会直接报告，避免误用源码目录。
 
 ## 可选依赖 scheduler-app
 
@@ -209,8 +209,8 @@ FEISHU_DRY_RUN=1 node server/server.js
 里的一次性提醒，只有 root 读得到）。没装就只少这一条指令，
 监控页也不再展示单次提醒——要查就得在飞书里问。
 
-安装方式：把 scheduler-app 放到 `/opt/scheduler-app` 或 `/root/scheduler-app`，
-或用 `SCHEDULER_APP_DIR` 指定路径后重启。
+安装方式：把 scheduler-app 部署到 `/opt/scheduler-app`，
+或用 `SCHEDULER_APP_DIR` 显式指定路径后重启。
 
 ## 塔罗牌面图片
 
