@@ -29,6 +29,7 @@ const IMGS = require('./lib/images.js');
 const CMDS = require('./lib/commands.js');
 const UTIL = require('./lib/util.js');
 const OPTIONAL = require('./lib/optional-dependency.js');
+const INTERNAL_NOTIFY = require('./lib/internal-notify.js');
 
 // 类型别名：跨模块的形状从 lib/ 引，本文件自己的状态在这里定义
 /** @typedef {import('./lib/identity.js').NotifyTarget} NotifyTarget */
@@ -1635,61 +1636,19 @@ function resolveNotifyTarget(body) {
 }
 
 function startInternalNotifyServer() {
-  const server = http.createServer(function (req, res) {
-    /**
-     * @param {number} status
-     * @param {any} obj
-     * @returns {void}
-     */
-    function reply(status, obj) {
-      const body = JSON.stringify(obj);
-      res.writeHead(status, {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': 'no-store',
-        'Content-Length': Buffer.byteLength(body),
-      });
-      res.end(body);
-    }
-    const u = new URL(req.url || '/', 'http://localhost');
-    if (req.method !== 'POST' || u.pathname !== '/internal/notify') {
-      reply(404, { error: '接口不存在' });
-      return;
-    }
-    if (NOTIFY_TOKEN && !tokenEqual(String(req.headers['x-notify-token'] || ''), NOTIFY_TOKEN)) {
-      reply(401, { error: '通知令牌无效' });
-      return;
-    }
-    let data = '';
-    req.on('data', function (c) {
-      data += String(c);
-      if (data.length > 256 * 1024) req.destroy();
-    });
-    req.on('end', function () {
-      /** @type {any} */
-      let body = {};
-      try { body = JSON.parse(data || '{}'); } catch (e) {}
-      const text = String(body.text || '').trim();
-      if (!text) {
-        reply(400, { error: '缺少 text' });
-        return;
-      }
-      const target = resolveNotifyTarget(body);
-      if (!target) {
-        reply(503, { error: '没有可用的飞书接收人（请配置 FEISHU_NOTIFY_USER）' });
-        return;
-      }
-      deliver(target, text);
-      writeLog('info', '内部通知已发送', { length: text.length, target: target.label, kind: target.kind });
-      reply(200, { ok: true });
-    });
-    req.on('error', function () {});
+  const server = INTERNAL_NOTIFY.createInternalNotifyServer({
+    token: NOTIFY_TOKEN,
+    tokenEqual: tokenEqual,
+    resolveTarget: resolveNotifyTarget,
+    deliver: deliver,
+    writeLog: writeLog,
   });
   server.listen(INTERNAL_PORT, INTERNAL_HOST, function () {
     console.log('internal notify listening on http://' + INTERNAL_HOST + ':' + INTERNAL_PORT);
   });
-  server.on('error', function (e) {
-    console.error('内部通知接口启动失败：' + e.message);
-    writeLog('error', '内部通知接口启动失败', { error: e.message, port: INTERNAL_PORT });
+  server.on('error', function (error) {
+    console.error('内部通知接口启动失败：' + error.message);
+    writeLog('error', '内部通知接口启动失败', { error: error.message, port: INTERNAL_PORT });
   });
 }
 

@@ -29,21 +29,21 @@
 server/
 |-- server.js        长连接、消息分发、Codex 调度、发送队列（主流程）
 |-- tarot-image.js   塔罗牌面图片合成
-|-- lib/             纯函数：配置解析、文本解析、身份白名单、文件名、小工具
-`-- test/            node:test 单测（31 个用例）
+|-- lib/             解析与身份工具；internal-notify.js 处理本机通知接口
+`-- test/            node:test 单测
 ```
 
-`lib/` 下的都是不依赖运行期状态的纯函数，可以单独测；`server.js` 里对应位置保留
-同名别名或薄包装（依赖配置的那些把配置当参数传给 `lib/`），所以调用点没变。
+`lib/` 的解析工具可单独测；本机通知接口由 `internal-notify.js` 接收配置、投递与日志函数，
+`server.js` 只负责监听端口和连接业务依赖。
 
 ```bash
-npm test          # 等价于 node --test server/test/
-npm run typecheck # 等价于 tsc -p tsconfig.json && tsc -p tsconfig.strict.json
+npm test          # 等价于 node --test server/test/*.test.js
+npm run typecheck # 等价于 tsc -p tsconfig.json
 ```
 
 ## 类型检查
 
-用 TypeScript 做类型检查，**源码仍是 JS，没有构建步骤**——服务跑在 Node 16 上，
+用 TypeScript 做类型检查，**源码仍是 JS，没有构建步骤**——服务跑在 Node 24 上，
 部署又是直接拷 `server/` 目录，加一道编译不划算。类型靠 JSDoc 标注，
 `allowJs` + `checkJs` 来检查，`strict` 全开。
 
