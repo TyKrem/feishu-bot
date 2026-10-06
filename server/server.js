@@ -30,6 +30,7 @@ const CMDS = require('./lib/commands.js');
 const UTIL = require('./lib/util.js');
 const OPTIONAL = require('./lib/optional-dependency.js');
 const INTERNAL_NOTIFY = require('./lib/internal-notify.js');
+const { codexFailureMessage } = require('./lib/codex-error.js');
 
 // 类型别名：跨模块的形状从 lib/ 引，本文件自己的状态在这里定义
 /** @typedef {import('./lib/identity.js').NotifyTarget} NotifyTarget */
@@ -1476,6 +1477,7 @@ function runCodex(target, key, prompt, onText, fresh) {
     let buf = '';
     let stderrBuf = '';
     let stderrTail = '';
+    let failureMessage = '';
     /** @type {string[]} */
     let agentParts = [];
     let done = false;
@@ -1555,6 +1557,11 @@ function runCodex(target, key, prompt, onText, fresh) {
       }
       /** @type {Record<string, any>} */
       const logMeta = { key: key, thread: currentThread || threadId || null, type: ev.type };
+      const errorMessage = codexFailureMessage(ev);
+      if (errorMessage) {
+        failureMessage = errorMessage;
+        logMeta.error = errorMessage;
+      }
       if (ev.item && typeof ev.item === 'object') {
         logMeta.itemType = ev.item.type || '';
         logMeta.item = ev.item;
@@ -1616,9 +1623,12 @@ function runCodex(target, key, prompt, onText, fresh) {
         finish();
         return;
       }
-      const detail = stderrTail.trim().slice(-300);
+      const detail = failureMessage ? failureMessage.slice(0, 300) : stderrTail.trim().slice(-300);
       deliver(target, 'Codex 未正常完成（code=' + code + (signal ? ', signal=' + signal : '') + '）：' + detail);
-      writeLog('error', 'Codex 退出异常', { code: code, signal: signal || '', stderr: detail });
+      writeLog('error', 'Codex 退出异常', {
+        key: key, thread: currentThread || threadId || null,
+        code: code, signal: signal || '', error: failureMessage, stderr: stderrTail.trim().slice(-300),
+      });
       finish();
     });
   });

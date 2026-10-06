@@ -48,6 +48,18 @@ timeout 15 env FEISHU_DRY_RUN=1 FEISHU_INTERNAL_PORT=8798 \
 断言挑确定性的：关键字能不能整句匹配、空数据/坏数据的回复、受限账号被拒。
 时间相关的断言必须把 `now` 传进去，不然换个钟点跑就挂。
 
+## `.c` 执行失败的检查
+
+- 核对实际 `FEISHU_CODEX_BIN` 的版本；终端中的 `codex` 可能来自另一套安装。
+  同一模型在旧 CLI 返回“不支持 ChatGPT 账号”，在新 CLI 成功的情况已经实际出现。
+  对比时沿用服务环境、账号和模型，先做最小请求，不要直接清会话或改登录方式。
+- stdout 的 `error.message` 与 `turn.failed.error.message` 才是失败详情，后者还可能
+  嵌套接口 JSON；stderr 为空不代表没有原因。`item.completed` 的 `error` 可能只是提示。
+- `FEISHU_DRY_RUN` 只阻止机器人投递，**不会禁用 Codex hook**。真实模型探针可用
+  `--disable hooks --ephemeral`，避免测试触发通知或保存探针会话；先核对 CLI 支持这些参数。
+- 消息模拟另设临时 `FEISHU_DATA_DIR`、`FEISHU_CODEX_HOME`、`FEISHU_HEALTH_LOG`，
+  避免启动清理图片、复制配置或保存 thread 时触及生产数据。
+
 ## 上线
 
 ```bash

@@ -91,6 +91,15 @@ npm install --omit=dev
 还需要 [Codex CLI](https://github.com/openai/codex)（默认从 `/opt/codex/bin/codex`
 调用，可用 `FEISHU_CODEX_BIN` 指定）。
 
+排查 `.c` 的 `code=1` 时，先看日志中的具体错误。CLI 的接口失败可能只在
+stdout JSON 的 `error` / `turn.failed` 中返回，stderr 为空；机器人会把这段详情
+显示在失败回复并记录到日志。`item.completed` 中的 `error` 也可能只是模型切换提示，
+不能仅凭它判断整个回合失败。
+
+更新终端里的 Codex 不会自动更新机器人使用的独立安装目录。切换模型后异常时，
+分别检查 `FEISHU_CODEX_BIN` 指定的程序与终端 `codex` 的版本，并在相同账号、模型
+和服务环境下验证；不要仅凭旧 CLI 的“不支持该模型”错误更换模型或重新登录。
+
 ### 3. 配置
 
 ```bash
