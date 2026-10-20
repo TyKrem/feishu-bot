@@ -77,3 +77,6 @@ systemctl is-active feishu-bot && journalctl -u feishu-bot -n 20 --no-pager
 - 取消与断连必须终止执行器里的进程组，不能只杀消息入口的客户端；`server/test/executor.test.js`覆盖该边界。升级执行器等其空闲再重启，不能在飞书任务中重启自身。
 - 原始消息核验用飞书应用凭据，模型子进程使用显式环境白名单；不要为了修复认证给子进程重新传入整个process.env。读取权限撤销时应拒绝执行。
 - 依赖安装按锁文件走npm官方HTTPS，保留原integrity和版本。旧锁文件含HTTP镜像时会触发EALLOWREMOTE，不能通过关闭全局下载策略绕过。
+
+- CLI模型探针必须关闭stdin（stdio ignore或显式stdin.end）；保留默认pipe会让CLI等待额外输入，不能误判网络失败。诊断进程也应单独进程组并在超时终止整组，避免只杀Node启动器而留下native CLI。
+- runuser通常继承调用方/root工作目录，Node -e即使require绝对路径也可能因扫描/root/package.json失败；专用账户探针要显式使用/opt运行目录作为cwd。

@@ -16,7 +16,8 @@ RuntimeDirectory=feishu-executor
 RuntimeDirectoryMode=0750
 StateDirectory=feishu-executor
 StateDirectoryMode=0700
-UMask=0077
+# 模型创建源码需沿用普通文件权限；私有状态始终显式600、目录700。
+UMask=0022
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=8

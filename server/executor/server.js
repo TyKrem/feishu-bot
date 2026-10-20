@@ -188,6 +188,9 @@ function createExecutor(options) {
 
 if (require.main === module) {
   const environment = process.env;
+  // 核验失败须及时拒绝，不能让飞书HTTP请求长期占住特权入口。
+  const transport = /** @type {any} */ (lark.defaultHttpInstance);
+  transport.defaults.timeout = 8000;
   const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {} };
   const client = new lark.Client({ appId: environment.FEISHU_APP_ID || '', appSecret: environment.FEISHU_APP_SECRET || '',
     domain: environment.FEISHU_DOMAIN === 'lark' ? lark.Domain.Lark : lark.Domain.Feishu, logger });

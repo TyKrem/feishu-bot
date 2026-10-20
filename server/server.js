@@ -1574,7 +1574,7 @@ function runCodex(target, key, prompt, onText, fresh) {
       const errorMessage = codexFailureMessage(ev);
       if (errorMessage) {
         failureMessage = errorMessage;
-        logMeta.error = errorMessage;
+        logMeta.error = EXECUTOR_ENABLED ? '模型回合失败，详情仅回传管理员' : errorMessage;
       }
       if (ev.item && typeof ev.item === 'object') {
         logMeta.itemType = ev.item.type || '';
@@ -1642,7 +1642,8 @@ function runCodex(target, key, prompt, onText, fresh) {
       deliver(target, 'Codex 未正常完成（code=' + code + (signal ? ', signal=' + signal : '') + '）：' + detail);
       writeLog('error', 'Codex 退出异常', {
         key: key, thread: currentThread || threadId || null,
-        code: code, signal: signal || '', error: failureMessage, stderr: stderrTail.trim().slice(-300),
+        code: code, signal: signal || '',
+        ...(EXECUTOR_ENABLED ? { error: '模型执行失败，详情仅回传管理员', stderrLength: stderrTail.length } : { error: failureMessage, stderr: stderrTail.trim().slice(-300) }),
       });
       finish();
     });
