@@ -1,26 +1,33 @@
 [Unit]
-Description=Feishu Codex Bridge (Lark long connection)
-After=network-online.target log-center.service
-Wants=network-online.target log-center.service
+Description=飞书消息入口与通知服务
+After=network-online.target log-center.service feishu-executor.service
+Wants=network-online.target log-center.service feishu-executor.service
 
 [Service]
 Type=simple
-User=root
-Group=root
+User=feishu-bot
+Group=feishu-bot
 EnvironmentFile=/etc/feishu-bot.env
-WorkingDirectory=/opt/feishu-bot
-# Codex CLI 的启动脚本是 #!/usr/bin/env node，而 systemd 的默认 PATH
-# （/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin）里没有 node——
-# 用户发消息时会看到「Codex 未正常完成（code=127）：/usr/bin/env: 'node':
-# No such file or directory」（2026-09-24 实测）。这里把 Node 的 bin 加进来。
 Environment="PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+WorkingDirectory=/opt/feishu-bot
 ExecStart=/opt/node/bin/node /opt/feishu-bot/server/server.js
 Restart=always
 RestartSec=5
-# 78 = EX_CONFIG：缺少应用凭据时不要无意义地反复重启
 RestartPreventExitStatus=78
+UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/feishu-bot/data /opt/life-app/data /var/log/feishu-bot-health.log
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target

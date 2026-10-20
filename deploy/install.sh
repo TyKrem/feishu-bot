@@ -1,58 +1,52 @@
 #!/usr/bin/env bash
-# 部署 / 更新 feishu-bot：同步源码 → 安装依赖 → 写入环境文件 → 安装 systemd 单元
+# 源码只读，数据保留；分阶段迁移时先启用执行器，再降权入口。
 set -euo pipefail
-
-SRC_DIR=/root/feishu-bot
-DEST_DIR=/opt/feishu-bot
-ENV_FILE=/etc/feishu-bot.env
-UNIT_FILE=/etc/systemd/system/feishu-bot.service
-
-NODE_BIN=/opt/node/bin/node
-if [ ! -x "$NODE_BIN" ]; then NODE_BIN="$(command -v node)"; fi
-NPM_BIN="$(command -v npm || true)"
-if [ -z "$NPM_BIN" ] && [ -x /opt/node/bin/npm ]; then
-  NPM_BIN=/opt/node/bin/npm
+source_directory=/root/feishu-bot
+runtime_directory=/opt/feishu-bot
+phase="${FEISHU_ISOLATION_PHASE:-isolated}"
+case "$phase" in executor|isolated) ;; *) echo '未知迁移阶段' >&2; exit 2 ;; esac
+[ -f /etc/feishu-bot.env ] || { echo '请先创建/etc/feishu-bot.env' >&2; exit 1; }
+if ! getent passwd feishu-bot >/dev/null; then
+  useradd --system --user-group --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin feishu-bot
 fi
-if [ -z "$NPM_BIN" ]; then echo "找不到 npm，无法安装依赖" >&2; exit 1; fi
-
-echo "==> 同步源码到 $DEST_DIR"
-mkdir -p "$DEST_DIR/server" "$DEST_DIR/data"
-cp -a "$SRC_DIR/server/." "$DEST_DIR/server/"
-# bin/ 里是 setup-account.sh 这类运维工具，原先漏了同步，导致 /opt 里留着旧副本
-mkdir -p "$DEST_DIR/bin"
-cp -a "$SRC_DIR/bin/." "$DEST_DIR/bin/"
-cp -a "$SRC_DIR/package.json" "$DEST_DIR/package.json"
-chmod 700 "$DEST_DIR/data"
-
-echo "==> 安装依赖（$NPM_BIN）"
-( cd "$DEST_DIR" && "$NPM_BIN" install --omit=dev --no-audit --no-fund )
-
-echo "==> 准备环境文件 $ENV_FILE"
-if [ ! -f "$ENV_FILE" ]; then
-  cp "$SRC_DIR/deploy/feishu-bot.env.example" "$ENV_FILE"
-  chmod 600 "$ENV_FILE"
-  echo "注意：FEISHU_NOTIFY_TOKEN 供定时任务调用内部通知接口，FEISHU_LOG_TOKEN 供日志中心写入。" >&2
-  echo "      两者留空会导致定时推送失败 / 日志不上报，请填写后再启动服务。" >&2
+[ "$(id -u feishu-bot)" -gt 0 ] && [ "$(id -u feishu-bot)" -lt 1000 ] || exit 1
+[ "$(id -Gn feishu-bot)" = feishu-bot ] || { echo '服务账户存在额外组，拒绝继续' >&2; exit 1; }
+usermod --lock --shell /usr/sbin/nologin feishu-bot
+# 独立片段避免其他项目发布时重写四账户清单而漏掉飞书账户。
+printf '%s\n' '# 飞书入口账户禁止SSH认证及转发。' 'DenyUsers feishu-bot' > /etc/ssh/sshd_config.d/01-feishu-bot.conf
+chmod 644 /etc/ssh/sshd_config.d/01-feishu-bot.conf
+/usr/sbin/sshd -t
+systemctl reload ssh
+install -d -m 700 /var/lib/feishu-executor
+install -d -m 755 "$runtime_directory/server" "$runtime_directory/bin"
+cp -a "$source_directory/server/." "$runtime_directory/server/"
+cp -a "$source_directory/bin/." "$runtime_directory/bin/"
+cp "$source_directory/package.json" "$source_directory/package-lock.json" "$runtime_directory/"
+PATH=/opt/node/bin:$PATH /opt/node/bin/npm ci --prefix "$runtime_directory" --omit=dev --no-audit --no-fund >/dev/null
+install -d -m 700 "$runtime_directory/data"
+/opt/node/bin/node "$source_directory/deploy/prepare-executor.js"
+install -m 644 "$source_directory/deploy/feishu-executor.service" /etc/systemd/system/feishu-executor.service
+if [ "$phase" = isolated ]; then
+  for directory in /opt/feishu-bot/data /opt/life-app/data; do
+    [ ! -L "$directory" ] || { echo '数据目录不能是符号链接' >&2; exit 1; }
+    [ -z "$(find "$directory" -xdev -type f -links +1 -print -quit)" ] || { echo '数据含硬链接，须先核对' >&2; exit 1; }
+    find "$directory" -xdev -exec chown -h feishu-bot:feishu-bot {} +
+    chmod 700 "$directory"
+  done
+  touch /var/log/feishu-bot-health.log
+  chown feishu-bot:feishu-bot /var/log/feishu-bot-health.log
+  chmod 600 /var/log/feishu-bot-health.log
+  install -m 644 "$source_directory/deploy/feishu-bot.service" /etc/systemd/system/feishu-bot.service
 else
-  echo "    已存在，保持不变（不会覆盖你填写的凭据）"
+  install -m 644 "$source_directory/deploy/feishu-bot-transition.service" /etc/systemd/system/feishu-bot.service
 fi
-
-echo "==> 安装 systemd 单元"
-cp "$SRC_DIR/deploy/feishu-bot.service" "$UNIT_FILE"
 systemctl daemon-reload
-systemctl enable feishu-bot.service >/dev/null 2>&1 || true
-
-echo
-echo "==> 配置检查"
-set +e
-env -i $(grep -v '^#' "$ENV_FILE" | grep -v '^$' | xargs) \
-  "$NODE_BIN" "$DEST_DIR/server/server.js" --check
-check_rc=$?
-set -e
-
-echo
-if [ $check_rc -eq 0 ]; then
-  echo "配置完整，执行：systemctl restart feishu-bot"
+systemctl enable feishu-executor.service feishu-bot.service >/dev/null
+# 正在执行的任务留待下次维护，不能在飞书自部署时杀掉执行器自身。
+if systemctl is-active --quiet feishu-executor.service; then
+  echo '执行器保持运行；若其源码改变，请待当前回合结束后单独重启验证。'
 else
-  echo "配置尚未完成，请编辑 $ENV_FILE 后执行：systemctl restart feishu-bot"
+  systemctl start feishu-executor.service
 fi
+systemctl is-active --quiet feishu-executor.service
+printf '飞书部署完成：阶段=%s；数据已保留。\n' "$phase"

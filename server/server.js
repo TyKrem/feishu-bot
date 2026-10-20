@@ -30,6 +30,8 @@ const CMDS = require('./lib/commands.js');
 const UTIL = require('./lib/util.js');
 const OPTIONAL = require('./lib/optional-dependency.js');
 const INTERNAL_NOTIFY = require('./lib/internal-notify.js');
+const EXECUTOR = require('./executor/client.js');
+const EXECUTOR_ENABLED = !!process.env.FEISHU_EXECUTOR_SOCKET;
 const { codexFailureMessage } = require('./lib/codex-error.js');
 
 // 类型别名：跨模块的形状从 lib/ 引，本文件自己的状态在这里定义
@@ -158,7 +160,7 @@ const LIFE_KEY_MAP = parseKeyMap(ENV.FEISHU_LIFE_KEY_MAP);
 const LEGACY_TO_FEISHU = reverseMap(LIFE_KEY_MAP);
 
 /* ---------------- 模型直连（受限账号纯聊天） ---------------- */
-const GUEST_CONFIG_TEXT = readTextFile('/root/.codex/config.toml');
+const GUEST_CONFIG_TEXT = EXECUTOR_ENABLED ? '' : readTextFile('/root/.codex/config.toml');
 
 const GUEST_API_BASE = String(ENV.FEISHU_CHAT_API_BASE_URL || ENV.CHAT_API_BASE_URL || tomlValue(GUEST_CONFIG_TEXT, 'base_url') || '').trim();
 const GUEST_API_KEY = String(ENV.FEISHU_CHAT_API_KEY || ENV.CHAT_API_KEY || tomlValue(GUEST_CONFIG_TEXT, 'experimental_bearer_token') || '').trim();
@@ -307,6 +309,7 @@ function getJson(url) {
  * @returns {Promise<void>}
  */
 async function kbSearchCommand(replyTarget, ids, keyword) {
+  if (EXECUTOR_ENABLED) { const result = await EXECUTOR.request('/query', { messageId: replyTarget.id, chatId: replyTarget.fallbackChatId }); deliver(replyTarget, result.text); return; }
   const args = ['/root/server-ops/bin/kb-search.sh'].concat(keyword.split(/\s+/).filter(Boolean));
   const result = await runCommand('bash', args, 20000);
   writeLog('info', '查询知识库', { openId: ids[0], keyword: keyword.slice(0, 60) });
@@ -320,6 +323,7 @@ async function kbSearchCommand(replyTarget, ids, keyword) {
  * @returns {Promise<void>}
  */
 async function statusCommand(replyTarget, ids) {
+  if (EXECUTOR_ENABLED) { const result = await EXECUTOR.request('/query', { messageId: replyTarget.id, chatId: replyTarget.fallbackChatId }); deliver(replyTarget, result.text); return; }
   const result = await runCommand(HEALTH_SCRIPT, [], 60000);
   writeLog('info', '查询服务器状态', { openId: ids[0], exitCode: result.code });
   deliver(replyTarget, healthText(result.output, result.code, Date.now()));
@@ -331,6 +335,7 @@ async function statusCommand(replyTarget, ids) {
  * @returns {Promise<void>}
  */
 async function usageCommand(replyTarget, ids) {
+  if (EXECUTOR_ENABLED) { const result = await EXECUTOR.request('/query', { messageId: replyTarget.id, chatId: replyTarget.fallbackChatId }); deliver(replyTarget, result.text); return; }
   const payload = await getJson(MONITOR_API + '/api/balance');
   writeLog('info', '查询用量与余额', { openId: ids[0] });
   const text = usageText(payload.balance || null, payload.chat || null, Date.now());
@@ -343,6 +348,7 @@ async function usageCommand(replyTarget, ids) {
  * @returns {Promise<void>}
  */
 async function timersCommand(replyTarget, ids) {
+  if (EXECUTOR_ENABLED) { const result = await EXECUTOR.request('/query', { messageId: replyTarget.id, chatId: replyTarget.fallbackChatId }); deliver(replyTarget, result.text); return; }
   const list = await runCommand('systemctl', ['list-timers', '--all', '--no-legend', '--plain'], 10000);
   const rows = timerRows(list.output);
   const active = rows.filter(function (row) { return !!row.nextText; }).map(function (row) { return row.activated; });
@@ -369,6 +375,7 @@ function readTextFile(p) {
 
 function ensureDirs() {
   try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (e) {}
+  if (EXECUTOR_ENABLED) return;
   try {
     fs.mkdirSync(CODEX_HOME, { recursive: true });
     const src = readTextFile('/root/.codex/config.toml');
@@ -889,6 +896,7 @@ function restartRequested() {
 
 function applyPendingRestart() {
   if (activeTurns > 0 || !restartRequested()) return;
+  if (EXECUTOR_ENABLED) { EXECUTOR.request('/restart', {}).catch(() => writeLog('warn', '排队重启请求失败', {})); return; }
   try { fs.unlinkSync(RESTART_FLAG); } catch (e) {}
   writeLog('info', '按排队的请求重启自身', { reason: '部署脚本在飞书会话里跑时写入的标记' });
   // 稍等一下再重启：此刻这条回复刚进发送队列，给它一点时间真正发出去
@@ -1087,8 +1095,13 @@ function handleMessage(data) {
 
   const life = lifeKey(ids);
 
+  if (EXECUTOR_ENABLED && /^(?:\.stop|\.cancel|停止任务|取消任务)$/i.test(text)) {
+    EXECUTOR.request('/cancel', { messageId: replyTarget.id, chatId: chatId }).then(result => deliver(replyTarget, result.text)).catch(error => deliver(replyTarget, '取消失败：' + errText(error)));
+    return;
+  }
   const codexPrompt = extractCodexPrompt(text);
   if (codexPrompt !== null) {
+    if (EXECUTOR_ENABLED && !restricted && (isGroup || ids[0] !== NOTIFY_USER)) { deliver(replyTarget, '运维功能只对管理员私聊开放。'); return; }
     if (!codexPrompt) {
       deliver(replyTarget, '用法：.c 你的需求 / .codex 你的需求');
       return;
@@ -1125,6 +1138,7 @@ function handleMessage(data) {
       deliver(replyTarget, NEED_SCHEDULER_APP);
       return;
     }
+    if (EXECUTOR_ENABLED) { EXECUTOR.request('/query', { messageId: replyTarget.id, chatId: chatId }).then(result => deliver(replyTarget, result.text)).catch(error => deliver(replyTarget, '任务查询失败：' + errText(error))); return; }
     let tasks = [];
     try {
       tasks = SCHED_ONCE.readOnceTasks(ONCE_TASKS_DIR);
@@ -1457,11 +1471,11 @@ function runCodex(target, key, prompt, onText, fresh) {
     /** @type {import('child_process').ChildProcess} */
     let child;
     try {
-      child = spawn(CODEX_BIN, args, {
-        cwd: WORKSPACE,
+      child = spawn(EXECUTOR_ENABLED ? process.execPath : CODEX_BIN, EXECUTOR_ENABLED ? [path.join(__dirname, 'executor/client.js'), JSON.stringify({ messageId: target.id, chatId: target.fallbackChatId })] : args, {
+        cwd: EXECUTOR_ENABLED ? DATA_DIR : WORKSPACE,
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: Object.assign({}, process.env, {
+        env: EXECUTOR_ENABLED ? { PATH: '/opt/node/bin:/usr/bin:/bin', FEISHU_EXECUTOR_SOCKET: ENV.FEISHU_EXECUTOR_SOCKET } : Object.assign({}, process.env, {
           CODEX_HOME: CODEX_HOME,
           HOME: ENV.HOME || '/root',
           NO_COLOR: '1',
