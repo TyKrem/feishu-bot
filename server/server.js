@@ -1308,7 +1308,7 @@ function startCodexTask(target, ids, key, life, restricted, prompt) {
     userId: ids[1] || '',
     lifeKey: life,
     restricted: restricted,
-    text: prompt.slice(0, 1000),
+    textLength: prompt.length,
   });
   if (activeCount >= MAX_ACTIVE) {
     deliver(target, '当前 Codex 任务较多，请稍后再发。');
@@ -1540,7 +1540,7 @@ function runCodex(target, key, prompt, onText, fresh) {
           key: key,
           thread: currentThread || threadId || null,
           stream: 'stdout',
-          text: line,
+          ...(EXECUTOR_ENABLED ? { textLength: line.length } : { text: line }),
         });
         return;
       }
@@ -1578,7 +1578,8 @@ function runCodex(target, key, prompt, onText, fresh) {
       }
       if (ev.item && typeof ev.item === 'object') {
         logMeta.itemType = ev.item.type || '';
-        logMeta.item = ev.item;
+        if (!EXECUTOR_ENABLED) logMeta.item = ev.item;
+        else logMeta.textLength = String(ev.item.text || '').length;
       }
       if (ev.usage) logMeta.usage = ev.usage;
       writeLog('debug', 'Codex 输出', logMeta);
@@ -1592,7 +1593,7 @@ function runCodex(target, key, prompt, onText, fresh) {
         key: key,
         thread: currentThread || threadId || null,
         stream: 'stderr',
-        text: t,
+        ...(EXECUTOR_ENABLED ? { textLength: t.length } : { text: t }),
       });
     }
 

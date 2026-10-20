@@ -67,5 +67,13 @@ bash /root/server-ops/bin/deploy-app.sh feishu-bot   # install.sh 同步源码 +
 systemctl is-active feishu-bot && journalctl -u feishu-bot -n 20 --no-pager
 ```
 
-装完先看 `--check` 输出（install.sh 会跑），里面列了白名单、单次提醒目录、
+装完按服务环境运行 `--check`，其中列出白名单、单次提醒目录、
 生活键映射——路径写错在这一步就能看出来。
+
+## 独立执行器的验证边界
+
+- 消息入口使用专用账户；启用`FEISHU_EXECUTOR_SOCKET`时，`.c`及固定查询改走Unix socket。模型进程的原始正文由执行器向飞书回查，不能用伪造模拟事件证明真实运维调用通过；合成消息只能测试拒绝路径，正向链路用本人十分钟内的新私聊消息。
+- 执行器状态及模型登录仍是root专用，不能为迁移给入口开放/root。初次迁移在入口停止写入后校正data属主；生活数据的root定时任务必须继承目录属主，防止后续原子替换生成600/root文件。
+- 取消与断连必须终止执行器里的进程组，不能只杀消息入口的客户端；`server/test/executor.test.js`覆盖该边界。升级执行器等其空闲再重启，不能在飞书任务中重启自身。
+- 原始消息核验用飞书应用凭据，模型子进程使用显式环境白名单；不要为了修复认证给子进程重新传入整个process.env。读取权限撤销时应拒绝执行。
+- 依赖安装按锁文件走npm官方HTTPS，保留原integrity和版本。旧锁文件含HTTP镜像时会触发EALLOWREMOTE，不能通过关闭全局下载策略绕过。

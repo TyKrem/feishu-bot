@@ -27,6 +27,19 @@ install -d -m 700 "$runtime_directory/data"
 /opt/node/bin/node "$source_directory/deploy/prepare-executor.js"
 install -m 644 "$source_directory/deploy/feishu-executor.service" /etc/systemd/system/feishu-executor.service
 if [ "$phase" = isolated ]; then
+  # 首次从root切换时先静止写入，避免最后一次root写入把线程文件重新变成600/root。
+  if systemctl is-active --quiet feishu-bot && [ "$(systemctl show feishu-bot -p User --value)" = root ]; then
+    [ "${CODEX_HOME:-}" != /root/.codex-feishu ] || { echo '首次降权须从独立终端执行，不能中断自己的飞书回合' >&2; exit 1; }
+    /opt/node/bin/node - <<'JS'
+const http=require('http');
+const call=http.request({socketPath:'/run/feishu-executor/control.sock',method:'POST',path:'/health'},response=>{
+ let body='';response.on('data',chunk=>body+=chunk);response.on('end',()=>{try { if(JSON.parse(body).active!==0)process.exitCode=1; }catch {process.exitCode=1;}});
+});call.setTimeout(3000,()=>call.destroy());call.on('error',()=>{process.exitCode=1;});call.end('{}');
+JS
+    cp /etc/systemd/system/feishu-bot.service /var/lib/feishu-executor/migration-previous.service
+    trap 'cp /var/lib/feishu-executor/migration-previous.service /etc/systemd/system/feishu-bot.service; systemctl daemon-reload; systemctl start feishu-bot; echo "迁移失败，已恢复入口单元，数据保留" >&2' ERR
+    systemctl stop feishu-bot
+  fi
   for directory in /opt/feishu-bot/data /opt/life-app/data; do
     [ ! -L "$directory" ] || { echo '数据目录不能是符号链接' >&2; exit 1; }
     [ -z "$(find "$directory" -xdev -type f -links +1 -print -quit)" ] || { echo '数据含硬链接，须先核对' >&2; exit 1; }
