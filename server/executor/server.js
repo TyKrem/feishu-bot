@@ -61,7 +61,9 @@ function createExecutor(options) {
       }
       case 'tasks': return CMDS.onceTasksText(require(path.join('/opt/scheduler-app', 'lib/once')).readOnceTasks('/opt/scheduler-app/data/once'), now);
       case 'usage': {
-        const response = await (/** @type {any} */ (globalThis)).fetch('http://127.0.0.1:8791/api/balance', { signal: AbortSignal.timeout(15000) });
+        const target = environment.FEISHU_MONITOR_API;
+        if (!/^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(target || '')) throw new Error('未配置受信任的本机余额查询地址');
+        const response = await (/** @type {any} */ (globalThis)).fetch(target + '/api/balance', { signal: AbortSignal.timeout(15000) });
         const payload = await response.json();
         return CMDS.usageText(payload.balance || null, payload.chat || null, now) + (payload.error ? '\n⚠️ 余额接口：' + payload.error : '');
       }
