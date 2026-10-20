@@ -14,8 +14,8 @@ fs.mkdirSync(home, { recursive: true, mode: 0o700 });
 const configuration = fs.readFileSync('/root/.codex/config.toml', 'utf8');
 fs.writeFileSync(path.join(home, 'config.toml'), configuration.replace(/^model_catalog_json\s*=.*$/m, 'model_catalog_json = "' + home + '/models.json"'), { mode: 0o600 });
 if (fs.existsSync('/root/.codex/models.json')) fs.copyFileSync('/root/.codex/models.json', path.join(home, 'models.json'));
-// 受限纯聊天不能再偷偷读root配置，显式保留原来可用的模型字段。
-const mappings = { FEISHU_CHAT_API_BASE_URL: 'base_url', FEISHU_CHAT_API_KEY: 'experimental_bearer_token', FEISHU_CHAT_API_MODEL: 'model' };
+// 受限纯聊天只沿用非秘密参数；API密钥须独立配置，不能复制运维模型的凭据。
+const mappings = { FEISHU_CHAT_API_BASE_URL: 'base_url', FEISHU_CHAT_API_MODEL: 'model' };
 let added = '';
 for (const [key, field] of Object.entries(mappings)) {
   const value = CFG.tomlValue(configuration, field);
