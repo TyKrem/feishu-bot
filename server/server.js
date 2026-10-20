@@ -1101,7 +1101,7 @@ function handleMessage(data) {
   }
   const codexPrompt = extractCodexPrompt(text);
   if (codexPrompt !== null) {
-    if (EXECUTOR_ENABLED && !restricted && (isGroup || ids[0] !== NOTIFY_USER)) { deliver(replyTarget, '运维功能只对管理员私聊开放。'); return; }
+    if (EXECUTOR_ENABLED && !restricted && isGroup) { deliver(replyTarget, '运维功能只对管理员私聊开放。'); return; }
     if (!codexPrompt) {
       deliver(replyTarget, '用法：.c 你的需求 / .codex 你的需求');
       return;
