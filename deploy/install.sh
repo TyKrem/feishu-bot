@@ -22,7 +22,7 @@ install -d -m 755 "$runtime_directory/server" "$runtime_directory/bin"
 cp -a "$source_directory/server/." "$runtime_directory/server/"
 cp -a "$source_directory/bin/." "$runtime_directory/bin/"
 cp "$source_directory/package.json" "$source_directory/package-lock.json" "$runtime_directory/"
-PATH=/opt/node/bin:$PATH /opt/node/bin/npm ci --prefix "$runtime_directory" --omit=dev --no-audit --no-fund >/dev/null
+PATH=/opt/node/bin:$PATH /opt/node/bin/npm ci --prefix "$runtime_directory" --omit=dev --no-audit --no-fund --registry=https://registry.npmjs.org >/dev/null
 install -d -m 700 "$runtime_directory/data"
 /opt/node/bin/node "$source_directory/deploy/prepare-executor.js"
 install -m 644 "$source_directory/deploy/feishu-executor.service" /etc/systemd/system/feishu-executor.service
