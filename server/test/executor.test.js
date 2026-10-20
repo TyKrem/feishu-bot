@@ -84,3 +84,24 @@ test('取消指令终止独立模型进程，不能作为任意查询使用', as
     assert.equal((await request(socket, '/query', { messageId: 'om_unknown', chatId: 'oc_private' })).status, 403);
   } finally { server.close(); await once(server, 'close'); fs.rmSync(directory, { recursive: true, force: true }); }
 });
+
+test('执行器保留实际日期目录中的图片编号，拒绝越界和链接文件', () => {
+  const { imageContext } = require('../executor/policy');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'feishu-images-'));
+  const images = path.join(directory, 'images');
+  const day = path.join(images, '2026-10-20');
+  fs.mkdirSync(day, { recursive: true });
+  fs.writeFileSync(path.join(day, 'p_ou_owner_1.png'), 'synthetic-image');
+  fs.writeFileSync(path.join(directory, 'outside.png'), 'synthetic-outside');
+  fs.symlinkSync(path.join(directory, 'outside.png'), path.join(day, 'linked.png'));
+  fs.writeFileSync(path.join(images, 'index.json'), JSON.stringify({ items: { 'p:ou_owner': [
+    { n: 1, file: '2026-10-20/p_ou_owner_1.png' }, { n: 2, file: '../outside.png' }, { n: 3, file: '2026-10-20/linked.png' },
+  ] } }));
+  try {
+    const context = imageContext(directory, 'p:ou_owner');
+    assert.match(context, /第1张图片/); assert.match(context, /2026-10-20/);
+    assert.doesNotMatch(context, /第2张|第3张/);
+    fs.linkSync(path.join(day, 'p_ou_owner_1.png'), path.join(day, 'duplicate.png'));
+    assert.equal(imageContext(directory, 'p:ou_owner'), '');
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});

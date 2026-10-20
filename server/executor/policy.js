@@ -43,10 +43,30 @@ function childEnvironment(environment) {
 function imageContext(directory, key) {
   const root = path.join(directory, 'images');
   let entries;
-  try { entries = JSON.parse(fs.readFileSync(path.join(root, 'index.json'), 'utf8')).items[key]; } catch { return ''; }
+  let descriptor;
+  try {
+    if (!fs.lstatSync(root).isDirectory() || fs.lstatSync(root).isSymbolicLink()) return '';
+    descriptor = fs.openSync(path.join(root, 'index.json'), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const stat = fs.fstatSync(descriptor);
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > 1024 * 1024) return '';
+    entries = JSON.parse(fs.readFileSync(descriptor, 'utf8')).items[key];
+  } catch { return ''; }
+  finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
   if (!Array.isArray(entries)) return '';
-  return entries.slice(-10).filter(item => Number.isSafeInteger(item.n) && /^[a-zA-Z0-9_.-]+$/.test(item.file) &&
-    !item.file.startsWith('.') && fs.existsSync(path.join(root, item.file)) && !fs.lstatSync(path.join(root, item.file)).isSymbolicLink() && fs.lstatSync(path.join(root, item.file)).isFile() && fs.lstatSync(path.join(root, item.file)).nlink === 1).map(item => '第' + item.n + '张图片：' + path.join(root, item.file)).join('\n');
+  const lines = [];
+  for (const item of entries.slice(-10)) {
+    // 现有图片按日期分目录；接受该布局，同时拒绝越界路径和目录/文件链接。
+    if (!item || !Number.isSafeInteger(item.n) || item.n < 1 ||
+        !/^(?:\d{4}-\d{2}-\d{2}\/)?[A-Za-z0-9_-]+\.(?:jpg|jpeg|png|gif|webp|bmp|heic)$/.test(item.file)) continue;
+    const filename = path.join(root, item.file);
+    try {
+      const parent = fs.lstatSync(path.dirname(filename));
+      const stat = fs.lstatSync(filename);
+      if (!parent.isDirectory() || parent.isSymbolicLink() || !stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) continue;
+      lines.push('第' + item.n + '张图片：' + filename);
+    } catch { /* 图片可能被正常保留期清理，不影响其它图片与本轮文本任务。 */ }
+  }
+  return lines.join('\n');
 }
 
 module.exports = { authorize, childEnvironment, imageContext };
