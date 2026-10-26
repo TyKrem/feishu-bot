@@ -100,6 +100,12 @@ stdout JSON 的 `error` / `turn.failed` 中返回，stderr 为空；机器人会
 分别检查 `FEISHU_CODEX_BIN` 指定的程序与终端 `codex` 的版本，并在相同账号、模型
 和服务环境下验证；不要仅凭旧 CLI 的“不支持该模型”错误更换模型或重新登录。
 
+切换 `/root/.codex/config.toml` 的模型或 `model_provider` 后，运行
+`node deploy/prepare-executor.js` 将主配置和模型目录同步到执行器专用
+`CODEX_HOME`。跨 provider 时旧线程属于原 provider，先备份
+`/var/lib/feishu-executor/state.json`，再清空对应的 `threads` 映射，让下一条
+`.c` 新开会话；不要把模型密钥手工复制进 `/etc/feishu-bot.env`。
+
 ### 3. 配置
 
 ```bash
@@ -267,6 +273,10 @@ FEISHU_DRY_RUN=1 node server/server.js
 消息入口使用专用无登录账户，只能写自身data、共享生活data及健康日志；代码由root持有。执行器是独立root服务，仅提供Unix socket，不监听公网端口。普通账户无sudo且禁止SSH。
 
 `.c`仅管理员私聊可用；管理员以执行器独立配置为准，与默认推送收件人解耦。执行器从飞书重新读取原始消息，核对独立配置的管理员open_id、固定私聊chat_id、消息ID、十分钟有效期及删除/编辑状态；提示从原始正文重建，不接受入口传来的命令、环境、工作目录或会话ID。模型子进程仅使用固定环境和既有专用模型登录目录，不继承飞书应用密钥或通知令牌。原有管理员会话首次迁移并由root私有状态继续管理，模型JSON输出流仍由入口整理回复。
+
+飞书偶尔会把新建消息标为 `updated=true`，但 `update_time` 仍等于 `create_time`。
+执行器以 `update_time > create_time` 判定真实编辑；单纯 `updated=true` 不会拒绝，
+真正编辑过的消息仍不会执行。
 
 状态、余额、定时器、任务与知识库通过固定查询接口读取，不向入口开放root目录。`.stop`／`.cancel`／停止任务／取消任务取消当前运维执行；连接中断和超时也终止执行进程组。请求限额、并发、响应大小均有上限。排队重启只消费root创建的安全标记，并等待执行器空闲；回复发送后再延迟重启。执行器仍是高权限信任边界，并不构成对任意管理员运维命令的沙箱。
 

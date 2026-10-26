@@ -8,13 +8,16 @@ const CMDS = require('../lib/commands');
 /** @param {any} message @param {any} configuration @param {number} now */
 function authorize(message, configuration, now) {
   if (!message || message.sender?.sender_type !== 'user' || message.sender.id_type !== 'open_id' ||
-      message.sender.id !== configuration.owner || message.chat_id !== configuration.chat || message.deleted || message.updated) {
+      message.sender.id !== configuration.owner || message.chat_id !== configuration.chat || message.deleted) {
     throw new Error('只允许管理员私聊中的原始消息');
   }
   const createdAt = Number(message.create_time);
+  const updatedAt = Number(message.update_time || message.create_time);
   if (!Number.isFinite(createdAt) || now - createdAt > 10 * 60000 || createdAt > now + 30000) {
     throw new Error('消息已过期或时间异常，请重新发送');
   }
+  // 飞书偶发把新建消息标成 updated=true，但真实编辑会推进 update_time。
+  if (!Number.isFinite(updatedAt) || updatedAt > createdAt) throw new Error('消息已被编辑，请重新发送');
   let text = TXT.stripMentionKeys(TXT.extractText({ message_type: message.msg_type, content: message.body?.content }), message.mentions);
   if (text.startsWith('。')) text = '.' + text.slice(1);
   if (text.length > 4000) throw new Error('消息超过长度限制');

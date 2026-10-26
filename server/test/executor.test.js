@@ -12,7 +12,8 @@ const { createExecutor } = require('../executor/server');
 
 /** @param {string} id @param {string} text @returns {any} */
 function message(id, text) {
-  return { message_id: id, chat_id: 'oc_private', create_time: String(Date.now()), msg_type: 'text',
+  const created = String(Date.now());
+  return { message_id: id, chat_id: 'oc_private', create_time: created, update_time: created, msg_type: 'text',
     sender: { id: 'ou_owner', id_type: 'open_id', sender_type: 'user' }, body: { content: JSON.stringify({ text }) } };
 }
 
@@ -20,8 +21,10 @@ test('原始消息授权拒绝伪造身份、群聊、过期消息和普通闲�
   const configuration = { owner: 'ou_owner', chat: 'oc_private' };
   const original = message('om_test', '.c 只输出通过');
   assert.equal(authorize(original, configuration, Date.now()).prompt, '只输出通过');
+  assert.equal(authorize({ ...original, updated: true }, configuration, Date.now()).prompt, '只输出通过');
   for (const invalid of [{ ...original, chat_id: 'oc_group' }, { ...original, sender: { id: 'ou_other' } },
-    { ...original, create_time: '0' }, { ...original, updated: true }, message('om_test', '普通闲聊')]) {
+    { ...original, create_time: '0' }, { ...original, updated: true, update_time: String(Number(original.create_time) + 1) },
+    message('om_test', '普通闲聊')]) {
     assert.throws(() => authorize(invalid, configuration, Date.now()));
   }
   const environment = childEnvironment({ FEISHU_APP_SECRET: 'synthetic', FEISHU_NOTIFY_TOKEN: 'synthetic', NODE_OPTIONS: '--inspect', HOME: '/tmp' });
