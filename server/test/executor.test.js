@@ -22,8 +22,10 @@ test('原始消息授权拒绝伪造身份、群聊、过期消息和普通闲�
   const original = message('om_test', '.c 只输出通过');
   assert.equal(authorize(original, configuration, Date.now()).prompt, '只输出通过');
   assert.equal(authorize({ ...original, updated: true }, configuration, Date.now()).prompt, '只输出通过');
+  assert.equal(authorize({ ...original, updated: true, update_time: String(Number(original.create_time) + 200) },
+    configuration, Date.now()).prompt, '只输出通过');
   for (const invalid of [{ ...original, chat_id: 'oc_group' }, { ...original, sender: { id: 'ou_other' } },
-    { ...original, create_time: '0' }, { ...original, updated: true, update_time: String(Number(original.create_time) + 1) },
+    { ...original, create_time: '0' }, { ...original, updated: true, update_time: String(Number(original.create_time) + 5000) },
     message('om_test', '普通闲聊')]) {
     assert.throws(() => authorize(invalid, configuration, Date.now()));
   }

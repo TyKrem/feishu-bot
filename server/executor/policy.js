@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const TXT = require('../lib/text');
 const CMDS = require('../lib/commands');
+const MESSAGE_METADATA_GRACE_MS = 2000;
 
 /** @param {any} message @param {any} configuration @param {number} now */
 function authorize(message, configuration, now) {
@@ -16,8 +17,10 @@ function authorize(message, configuration, now) {
   if (!Number.isFinite(createdAt) || now - createdAt > 10 * 60000 || createdAt > now + 30000) {
     throw new Error('消息已过期或时间异常，请重新发送');
   }
-  // 飞书偶发把新建消息标成 updated=true，但真实编辑会推进 update_time。
-  if (!Number.isFinite(updatedAt) || updatedAt > createdAt) throw new Error('消息已被编辑，请重新发送');
+  // 飞书客户端会在消息创建后数百毫秒回写 update_time，并置 updated=true。
+  // 允许这段初始化差异，超过宽限期才视为管理员真实编辑。
+  if (!Number.isFinite(updatedAt) || updatedAt < createdAt ||
+      updatedAt - createdAt > MESSAGE_METADATA_GRACE_MS) throw new Error('消息已被编辑，请重新发送');
   let text = TXT.stripMentionKeys(TXT.extractText({ message_type: message.msg_type, content: message.body?.content }), message.mentions);
   if (text.startsWith('。')) text = '.' + text.slice(1);
   if (text.length > 4000) throw new Error('消息超过长度限制');
