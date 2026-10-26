@@ -23,6 +23,9 @@ cp -a "$source_directory/server/." "$runtime_directory/server/"
 cp -a "$source_directory/bin/." "$runtime_directory/bin/"
 cp "$source_directory/package.json" "$source_directory/package-lock.json" "$runtime_directory/"
 PATH=/opt/node/bin:$PATH /opt/node/bin/npm ci --prefix "$runtime_directory" --omit=dev --no-audit --no-fund --registry=https://registry.npmjs.org >/dev/null
+# npm 会保留旧依赖目录的权限；严格 umask 下曾留下 700/600，专用账户读不到。
+# 运行时只需 root 可写、服务账户可读，不能依赖发布者的当前 umask。
+chmod -R u=rwX,go=rX "$runtime_directory/node_modules"
 install -d -m 700 "$runtime_directory/data"
 /opt/node/bin/node "$source_directory/deploy/prepare-executor.js"
 install -m 644 "$source_directory/deploy/feishu-executor.service" /etc/systemd/system/feishu-executor.service
