@@ -60,12 +60,12 @@ function createExecutor(options) {
         return CMDS.healthText(result.stdout, 'code' in result ? Number(result.code) : 0, now);
       }
       case 'tasks': return CMDS.onceTasksText(require(path.join('/opt/scheduler-app', 'lib/once')).readOnceTasks('/opt/scheduler-app/data/once'), now);
-      case 'usage': {
+      case 'balance': {
         const target = environment.FEISHU_MONITOR_API;
         if (!/^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(target || '')) throw new Error('未配置受信任的本机余额查询地址');
         const response = await (/** @type {any} */ (globalThis)).fetch(target + '/api/balance', { signal: AbortSignal.timeout(15000) });
         const payload = await response.json();
-        return CMDS.usageText(payload.balance || null, payload.chat || null, now) + (payload.error ? '\n⚠️ 余额接口：' + payload.error : '');
+        return CMDS.balanceText(payload.balance || null, now) + (payload.error ? '\n⚠️ 余额接口：' + payload.error : '');
       }
       case 'kb': {
         const result = await execute('/bin/bash', ['/root/server-ops/bin/kb-search.sh', ...command.keyword.split(/\s+/)], { timeout: 20000, maxBuffer: 1024 * 1024 });

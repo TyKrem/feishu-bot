@@ -4,20 +4,22 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const CMDS = require('../lib/commands.js');
 
-// 服务器类指令（状态 / 用量 / 定时器）的纯逻辑。
+// 服务器类指令（状态 / 余额 / 定时器）的纯逻辑。
 // 这些信息不放公开的监控页，改在飞书里查，所以格式和边界都钉在这里。
 
 test('服务器指令只认整句，不吞正文', function () {
   assert.ok(CMDS.isStatusCommand('状态'));
   assert.ok(CMDS.isStatusCommand('巡检'));
   assert.ok(CMDS.isStatusCommand('.status'));
-  assert.ok(CMDS.isUsageCommand('用量'));
-  assert.ok(CMDS.isUsageCommand('余额'));
+  assert.ok(CMDS.isBalanceCommand('余额'));
+  assert.ok(CMDS.isBalanceCommand('.balance'));
+  assert.ok(CMDS.isBalanceCommand('DeepSeek余额'));
+  assert.ok(CMDS.isBalanceCommand('Api 余额'));
   assert.ok(CMDS.isTimersCommand('定时器'));
   assert.ok(CMDS.isTimersCommand('计时器'));
   // 带上下文的话不能当指令，否则「状态怎么样」就发不出去了
   assert.ok(!CMDS.isStatusCommand('状态怎么样'));
-  assert.ok(!CMDS.isUsageCommand('用量是多少'));
+  assert.ok(!CMDS.isBalanceCommand('余额还有多少'));
   assert.ok(!CMDS.isTimersCommand('定时器列表'));
   assert.ok(!CMDS.isStatusCommand(''));
 });
@@ -105,46 +107,24 @@ test('shortWhen 把 systemctl 时间缩成 MM-DD HH:MM', function () {
   assert.strictEqual(CMDS.shortWhen(null), '--');
 });
 
-test('fmtTokens 大数字用万 / 亿', function () {
-  assert.strictEqual(CMDS.fmtTokens(999), '999');
-  assert.strictEqual(CMDS.fmtTokens(12345), '1.2 万');
-  assert.strictEqual(CMDS.fmtTokens(9153725), '915.4 万');
-  assert.strictEqual(CMDS.fmtTokens(123456789), '1.23 亿');
-  assert.strictEqual(CMDS.fmtTokens(null), '0');
+test('balanceText 只展示 DeepSeek 官方余额并区分币种', function () {
+  const now = new Date(2026, 9, 28, 13, 30).getTime();
+  const out = CMDS.balanceText({ isAvailable: true, balances: [
+    { currency: 'CNY', total: '80.49', granted: '0.00', toppedUp: '80.49' },
+    { currency: 'USD', total: '1.20', granted: '0.20', toppedUp: '1.00' },
+  ] }, now);
+  assert.equal(out, [
+    '💰 DeepSeek API 余额（10-28 13:30）',
+    '· 可用 ¥80.49（充值 ¥80.49 / 赠送 ¥0.00）',
+    '· 可用 $1.20（充值 $1.00 / 赠送 $0.20）',
+  ].join('\n'));
+  assert.ok(out.indexOf('Token') < 0);
 });
 
-test('usageText 汇总余额、最近记录与累计', function () {
-  const now = new Date(2026, 8, 17, 20, 5).getTime();
-  const out = CMDS.usageText(
-    { isAvailable: true, balances: [{ currency: 'CNY', total: '67.75', granted: '0.00', toppedUp: '67.75' }] },
-    {
-      conversations: 3,
-      messages: 23,
-      totalTokens: 9153725,
-      totals: { input: 9053038, output: 100687 },
-      last14: [
-        { date: '2026-09-10', input: 100, output: 10 },
-        { date: '2026-09-11', input: 4826541, output: 46514 },
-      ],
-    },
-    now
-  );
-  assert.ok(out.indexOf('💰 用量与余额（09-17 20:05）') === 0, out);
-  assert.ok(out.indexOf('余额 ¥67.75（充值 67.75 / 赠送 0.00）') > 0, out);
-  assert.ok(out.indexOf('最近记录 2026-09-11：输入 482.7 万 / 输出 4.7 万 tok') > 0, out);
-  assert.ok(out.indexOf('近 14 天：487.3 万 tok') > 0, out);
-  assert.ok(out.indexOf('累计：对话 3 个 · 消息 23 条 · 915.4 万 tok') > 0, out);
-});
-
-test('usageText 拿不到余额或用量时不炸', function () {
-  const out = CMDS.usageText(null, null, Date.now());
-  assert.ok(out.indexOf('余额：拿不到') > 0, out);
-  assert.strictEqual(out.split('\n').length, 2, '只有标题与余额一行：' + out);
-  const unavailable = CMDS.usageText({ isAvailable: false, balances: [] }, null, Date.now());
-  assert.ok(unavailable.indexOf('接口说不可用') > 0, unavailable);
-  // 有 totals 但 last14 是空的：不硬凑「近 14 天」，累计照常给
-  const noDaily = CMDS.usageText(null, { totals: { input: 10, output: 5 }, last14: [], totalTokens: 15 }, Date.now());
-  assert.ok(noDaily.indexOf('undefined') < 0, noDaily);
-  assert.ok(noDaily.indexOf('近 14 天') < 0, noDaily);
-  assert.ok(noDaily.indexOf('累计：对话 0 个 · 消息 0 条 · 15 tok') > 0, noDaily);
+test('balanceText 对不可用余额和空响应给出明确状态', function () {
+  const unavailable = CMDS.balanceText({ isAvailable: false, balances: [
+    { currency: 'CNY', total: '0.00', granted: '0.00', toppedUp: '0.00' },
+  ] }, Date.now());
+  assert.ok(unavailable.indexOf('当前余额不足') > 0, unavailable);
+  assert.ok(CMDS.balanceText(null, Date.now()).indexOf('余额：拿不到') > 0);
 });

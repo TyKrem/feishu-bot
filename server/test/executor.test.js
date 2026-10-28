@@ -90,6 +90,43 @@ test('取消指令终止独立模型进程，不能作为任意查询使用', as
   } finally { server.close(); await once(server, 'close'); fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
+test('余额指令只返回 DeepSeek 官方余额，用量入口已取消', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'feishu-balance-'));
+  const socket = path.join(directory, 'control.sock');
+  const configuration = { owner: 'ou_owner', chat: 'oc_private' };
+  const globals = /** @type {any} */ (globalThis);
+  const originalFetch = globals.fetch;
+  globals.fetch = async (/** @type {any} */ url) => {
+    assert.equal(url, 'http://127.0.0.1:8791/api/balance');
+    return { json: async () => ({ balance: { isAvailable: true, balances: [
+      { currency: 'CNY', total: '80.49', granted: '0.00', toppedUp: '80.49' },
+    ] } }) };
+  };
+  const server = createExecutor({ environment: {
+    FEISHU_EXECUTOR_OWNER: configuration.owner,
+    FEISHU_EXECUTOR_CHAT: configuration.chat,
+    FEISHU_MONITOR_API: 'http://127.0.0.1:8791',
+    FEISHU_WORKSPACE: directory,
+    FEISHU_DATA_DIR: directory,
+  }, stateDirectory: directory,
+  fetchMessage: async (/** @type {string} */ id) => message(id, id === 'om_usage' ? '用量' : '余额') });
+  server.listen(socket); await once(server, 'listening');
+  try {
+    const response = await request(socket, '/query', { messageId: 'om_balance', chatId: configuration.chat });
+    assert.equal(response.status, 200);
+    const text = JSON.parse(response.content).text;
+    assert.match(text, /DeepSeek API 余额/);
+    assert.match(text, /¥80\.49/);
+    assert.doesNotMatch(text, /Token|用量/);
+    const retired = await request(socket, '/query', { messageId: 'om_usage', chatId: configuration.chat });
+    assert.equal(retired.status, 403);
+  } finally {
+    globals.fetch = originalFetch;
+    server.close(); await once(server, 'close');
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('执行器保留实际日期目录中的图片编号，拒绝越界和链接文件', () => {
   const { imageContext } = require('../executor/policy');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'feishu-images-'));

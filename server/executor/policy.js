@@ -29,7 +29,7 @@ function authorize(message, configuration, now) {
   if (/^(?:\.fortune|\.f|运势|今日运势|今日运程|今日运气)$/i.test(text)) return { action: 'fortune', key: 'fortune:' + configuration.owner };
   if (/^(?:\.stop|\.cancel|停止任务|取消任务)$/i.test(text)) return { action: 'cancel' };
   if (CMDS.isStatusCommand(text)) return { action: 'status' };
-  if (CMDS.isUsageCommand(text)) return { action: 'usage' };
+  if (CMDS.isBalanceCommand(text)) return { action: 'balance' };
   if (CMDS.isTimersCommand(text)) return { action: 'timers' };
   if (CMDS.isOnceTasksCommand(text)) return { action: 'tasks' };
   const keyword = CMDS.kbQuery(text);

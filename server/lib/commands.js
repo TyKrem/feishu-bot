@@ -123,7 +123,7 @@ function onceTasksText(tasks, now) {
 }
 
 /* ---------------------------------------------------------------
- * 服务器类指令：状态 / 用量 / 定时器
+ * 服务器类指令：状态 / 余额 / 定时器
  *
  * 这些信息要么涉及服务器内部结构，要么是私事，都不适合放在公开的
  * 监控页上，所以放在飞书里查——只有白名单账号能用，受限账号不给。
@@ -132,7 +132,7 @@ function onceTasksText(tasks, now) {
 
 // 只认整句，免得把「状态怎么样」这类正文吞掉
 const STATUS_RE = /^(?:\.status|状态|服务器状态|巡检|服务器巡检|健康检查)$/i;
-const USAGE_RE = /^(?:\.usage|用量|余额|花费|花费统计|token|token用量)$/i;
+const BALANCE_RE = /^(?:\.balance|余额|api\s*余额|deepseek\s*(?:api\s*)?余额)$/i;
 const TIMERS_RE = /^(?:\.timers?|定时器|计时器|定时任务|计划任务)$/i;
 
 /**
@@ -144,11 +144,12 @@ function isStatusCommand(text) {
 }
 
 /**
+ * 查询 DeepSeek 官方 API 余额。
  * @param {unknown} text
  * @returns {boolean}
  */
-function isUsageCommand(text) {
-  return USAGE_RE.test(String(text || '').trim());
+function isBalanceCommand(text) {
+  return BALANCE_RE.test(String(text || '').trim());
 }
 
 /**
@@ -180,15 +181,16 @@ function stamp(now) {
 }
 
 /**
- * 大数字用「万 / 亿」更好读：12345678 → 1234.6 万
+ * DeepSeek 余额接口目前可能返回 CNY 或 USD；不要一律写成人民币。
+ * @param {string|undefined} currency
  * @param {unknown} value
  * @returns {string}
  */
-function fmtTokens(value) {
-  const n = Number(value) || 0;
-  if (Math.abs(n) >= 100000000) return (n / 100000000).toFixed(2) + ' 亿';
-  if (Math.abs(n) >= 10000) return (n / 10000).toFixed(1) + ' 万';
-  return String(Math.round(n));
+function fmtMoney(currency, value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return '--';
+  const symbol = currency === 'USD' ? '$' : currency === 'CNY' ? '¥' : (currency ? currency + ' ' : '');
+  return symbol + amount.toFixed(2);
 }
 
 /**
@@ -323,40 +325,23 @@ function timersText(rows, results, failedUnits, now) {
 }
 
 /**
- * 余额 + 用量文本。页面已经不再展示 Token 用量，要看就在这里看。
+ * DeepSeek 官方 API 余额。
  * @param {{isAvailable?: boolean, balances?: Array<{currency?: string, total?: string, granted?: string, toppedUp?: string}>}|null} balance
- * @param {{totals?: {input?: number, output?: number}, last14?: Array<{date?: string, input?: number, output?: number}>, conversations?: number, messages?: number, totalTokens?: number}|null} chat
  * @param {number} now
  * @returns {string}
  */
-function usageText(balance, chat, now) {
-  const lines = ['💰 用量与余额（' + stamp(now) + '）'];
+function balanceText(balance, now) {
+  const lines = ['💰 DeepSeek API 余额（' + stamp(now) + '）'];
   const rows = (balance && balance.balances) || [];
   if (rows.length) {
-    rows.forEach(function (b) {
-      const total = Number(b.total);
-      lines.push('· 余额 ' + (isFinite(total) ? '¥' + total.toFixed(2) : '--') +
-        '（充值 ' + (b.toppedUp == null ? '--' : b.toppedUp) +
-        ' / 赠送 ' + (b.granted == null ? '--' : b.granted) + '）');
+    rows.forEach(function (row) {
+      lines.push('· 可用 ' + fmtMoney(row.currency, row.total) +
+        '（充值 ' + fmtMoney(row.currency, row.toppedUp) +
+        ' / 赠送 ' + fmtMoney(row.currency, row.granted) + '）');
     });
+    if (balance && balance.isAvailable === false) lines.push('⚠️ 当前余额不足，API 调用可能失败');
   } else {
-    lines.push('· 余额：拿不到' + (balance && balance.isAvailable === false ? '（接口说不可用）' : ''));
-  }
-  const last14 = (chat && chat.last14) || [];
-  const latest = last14.length ? last14[last14.length - 1] : null;
-  if (latest) {
-    lines.push('· 最近记录 ' + (latest.date || '--') + '：输入 ' + fmtTokens(latest.input) +
-      ' / 输出 ' + fmtTokens(latest.output) + ' tok');
-  }
-  const totals = (chat && chat.totals) || null;
-  if (last14.length && totals) {
-    const sum = last14.reduce(function (acc, d) { return acc + (Number(d.input) || 0) + (Number(d.output) || 0); }, 0);
-    lines.push('· 近 14 天：' + fmtTokens(sum) + ' tok（输入 ' + fmtTokens(totals.input) +
-      ' / 输出 ' + fmtTokens(totals.output) + '）');
-  }
-  if (totals) {
-    lines.push('· 累计：对话 ' + ((chat && chat.conversations) || 0) + ' 个 · 消息 ' + ((chat && chat.messages) || 0) +
-      ' 条 · ' + fmtTokens(chat && chat.totalTokens) + ' tok');
+    lines.push('· 余额：拿不到');
   }
   return lines.join('\n');
 }
@@ -366,15 +351,14 @@ module.exports = {
   isOnceTasksCommand: isOnceTasksCommand,
   onceTasksText: onceTasksText,
   isStatusCommand: isStatusCommand,
-  isUsageCommand: isUsageCommand,
+  isBalanceCommand: isBalanceCommand,
   isTimersCommand: isTimersCommand,
   kbQuery: kbQuery,
   healthText: healthText,
+  balanceText: balanceText,
   timerRows: timerRows,
   parseShowResults: parseShowResults,
   parseFailedUnits: parseFailedUnits,
   shortWhen: shortWhen,
-  fmtTokens: fmtTokens,
   timersText: timersText,
-  usageText: usageText,
 };

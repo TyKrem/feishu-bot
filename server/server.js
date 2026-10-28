@@ -66,7 +66,7 @@ const rollDiceText = CMDS.rollDiceText;
 const isOnceTasksCommand = CMDS.isOnceTasksCommand;
 const onceTasksText = CMDS.onceTasksText;
 const isStatusCommand = CMDS.isStatusCommand;
-const isUsageCommand = CMDS.isUsageCommand;
+const isBalanceCommand = CMDS.isBalanceCommand;
 const isTimersCommand = CMDS.isTimersCommand;
 const kbQuery = CMDS.kbQuery;
 const healthText = CMDS.healthText;
@@ -74,7 +74,7 @@ const timerRows = CMDS.timerRows;
 const parseShowResults = CMDS.parseShowResults;
 const parseFailedUnits = CMDS.parseFailedUnits;
 const timersText = CMDS.timersText;
-const usageText = CMDS.usageText;
+const balanceText = CMDS.balanceText;
 
 // 生活指令（记账 / 待办 / 塔罗 / 运势）由可选的 life-app 提供。
 // 找不到就降级：机器人照常工作，只是少了这几条指令。
@@ -189,7 +189,7 @@ const HELP_HEAD =
   '· .rand 3d10 / 骰子 3d10 —— 投骰子（支持 2d6+1、d20）\n' +
   (SCHED_ONCE_ENABLED ? '· 任务 / .tasks —— 查看待执行的单次提醒\n' : '') +
   '· 状态 / 巡检 —— 服务器巡检结果（服务 / 端口 / 站点 / 磁盘 / 证书）\n' +
-  '· 用量 / 余额 —— API 余额与 Token 用量\n' +
+  '· 余额 —— DeepSeek API 余额\n' +
   '· 定时器 —— 定时任务的下次运行与上次结果\n' +
   '· 知识库 关键词 —— 查服务器知识库（项目/服务/端口/坑），例如「知识库 飞书」\n' +
   (LIFE_ENABLED ? '· .tarot / 塔罗牌 —— 抽一张塔罗并解读\n· .fortune / 今日运势 —— 每日运势（每天算一次，之后返回缓存）\n' : '') +
@@ -251,7 +251,7 @@ const NEED_SCHEDULER_APP =
   '这条指令依赖 scheduler-app（单次提醒），当前未安装。\n' +
   '把 scheduler-app 部署到 /opt/scheduler-app，或用 SCHEDULER_APP_DIR 指定路径后重启即可。';
 
-/* -------- 服务器类指令（状态 / 用量 / 定时器）--------
+/* -------- 服务器类指令（状态 / 余额 / 定时器）--------
  * 这几种信息要么涉及服务器内部结构（单元名、端口、crontab），要么是私事，
  * 都不适合放在公开的监控页上，所以在飞书里问。走本地脚本与本地接口，
  * 不经过 Codex——比 `.c 今天服务器状态` 快，也不烧 token。
@@ -334,11 +334,11 @@ async function statusCommand(replyTarget, ids) {
  * @param {string[]} ids
  * @returns {Promise<void>}
  */
-async function usageCommand(replyTarget, ids) {
+async function balanceCommand(replyTarget, ids) {
   if (EXECUTOR_ENABLED) { const result = await EXECUTOR.request('/query', { messageId: replyTarget.id, chatId: replyTarget.fallbackChatId }); deliver(replyTarget, result.text); return; }
   const payload = await getJson(MONITOR_API + '/api/balance');
-  writeLog('info', '查询用量与余额', { openId: ids[0] });
-  const text = usageText(payload.balance || null, payload.chat || null, Date.now());
+  writeLog('info', '查询 DeepSeek API 余额', { openId: ids[0] });
+  const text = balanceText(payload.balance || null, Date.now());
   deliver(replyTarget, payload.error ? text + '\n⚠️ 余额接口：' + payload.error : text);
 }
 
@@ -1152,9 +1152,9 @@ function handleMessage(data) {
     return;
   }
 
-  // 服务器类指令：状态 / 用量 / 定时器。走本地脚本与本地接口，不经过模型，
+  // 服务器类指令：状态 / 余额 / 定时器。走本地脚本与本地接口，不经过模型，
   // 也不给受限账号——服务器内部信息只给白名单账号看
-  if (isStatusCommand(text) || isUsageCommand(text) || isTimersCommand(text)) {
+  if (isStatusCommand(text) || isBalanceCommand(text) || isTimersCommand(text)) {
     if (restricted) {
       deliver(replyTarget, '⚠️ 受限账号不能查看服务器信息。');
       return;
@@ -1164,7 +1164,7 @@ function handleMessage(data) {
       deliver(replyTarget, '查询失败：' + errText(e));
     };
     if (isStatusCommand(text)) { statusCommand(replyTarget, ids).catch(onFail); return; }
-    if (isUsageCommand(text)) { usageCommand(replyTarget, ids).catch(onFail); return; }
+    if (isBalanceCommand(text)) { balanceCommand(replyTarget, ids).catch(onFail); return; }
     timersCommand(replyTarget, ids).catch(onFail);
     return;
   }
